@@ -23,7 +23,11 @@ include_directories(BEFORE ${CMAKE_BINARY_DIR}/src)
 include_directories(AFTER src)
 include(src/cocls/library.cmake)
 include(src/coroserver/library.cmake)
+include(src/docdb/library.cmake)
+include(src/shared/library.cmake)
 add_subdirectory("src/nostr_server")
 add_subdirectory("version")
+
+
 
 

@@ -4,3 +4,9 @@
 [submodule "src/coroserver"]
 	path = src/coroserver
 	url = https://github.com/ondra-novak/coroserver.git
+[submodule "src/docdb"]
+	path = src/docdb
+	url = https://github.com/ondra-novak/docdb
+[submodule "src/shared"]
+	path = src/shared
+	url = https://github.com/ondra-novak/ondra_shared
