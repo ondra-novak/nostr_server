@@ -1,4 +1,6 @@
 #include <coroserver/http_ws_server.h>
+#include <coroserver/static_lookup.h>
+#include <docdb/json.h>
 
 #include "peer.h"
 
@@ -32,13 +34,41 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
     co_return true;
 }
 
+template<typename Fn>
+void Peer::filter_event(const docdb::Structured &doc, Fn fn) const  {
+    std::lock_guard _(_mx);
+    for (const auto &sbs: _subscriptions) {
+        if (sbs.second.test(doc)) {
+            fn(sbs.first);
+        }
+    }
+}
+
+NAMED_ENUM(Command,
+        unknown,
+        REQ,
+        EVENT,
+        CLOSE,
+        COUNT,
+        EOSE,
+        NOTICE,
+        OK
+);
+constexpr NamedEnum_Command commands={};
+
+
 cocls::future<void> Peer::listen_publisher() {
     bool nx = co_await _subscriber.next();
     while (nx) {
+        const Event &v = _subscriber.value();
+        filter_event(v, [&](const std::string_view &s){
+            send({commands[Command::EVENT], s, &v});
+        });
         nx = co_await _subscriber.next();
     }
     co_return;
 }
+
 
 void Peer::processMessage(std::string_view msg_text) {
     _req.log_message([&](auto logger){
@@ -46,6 +76,76 @@ void Peer::processMessage(std::string_view msg_text) {
         buff << "Received: " << msg_text;
         logger(buff.view());
     });
+
+    auto msg = docdb::Structured::from_json(msg_text);
+    std::string_view cmd_text = msg[0].as<std::string_view>();
+
+    Command cmd = commands[cmd_text];
+    switch (cmd) {
+        case Command::EVENT: on_event(msg); break;
+        case Command::REQ: on_req(msg);break;
+        case Command::COUNT: on_count(msg);break;
+        case Command::CLOSE: on_close(msg);break;
+        default: {
+            send({commands[Command::NOTICE], std::string("Unknown command: ").append(cmd_text)});
+        }
+    }
+
+}
+
+void Peer::send(const docdb::Structured &msgdata) {
+    std::string json = msgdata.to_json();
+    _req.log_message([&](auto emit){
+        std::string msg = "Send: ";
+        msg.append(json);
+        emit(msg);
+    }, 0);
+    _stream.write({json});
+}
+
+void Peer::on_event(docdb::Structured &msg) {
+    try {
+        auto &storage = _app->get_storage();
+        docdb::Structured doc(std::move(msg.at(1)));
+        auto kind = doc["kind"].as<unsigned int>();
+        if (kind >= 20000 && kind < 30000) { //empheral event  - do not store
+            _app->get_publisher().publish(std::move(doc));
+            return;
+        }
+        IApp::IndexByAuthorKindFn idx;
+        docdb::DocID to_replace =0;
+        idx([&](docdb::Key &k){
+            auto r = _app->get_index_replaceable().find(k);
+            if (r) {
+                to_replace = r->id;
+                auto prev = storage.find(to_replace);
+                if (prev) {
+                    auto tm1 = doc["created_at"].as<std::time_t>();
+                    auto tm2 = prev->content["created_at"].as<std::time_t>();
+                    if (tm1<=tm2) {
+                        send({commands[Command::OK], false, "Event replaced too fast"});
+                        return;
+                    }
+                }
+            }
+        }, doc);
+
+        storage.put(doc, to_replace);
+        _app->get_publisher().publish(std::move(doc));
+        send({commands[Command::OK], true});
+    } catch (const std::exception &e) {
+        send({commands[Command::OK], false, e.what()});
+    }
+
+}
+
+void Peer::on_req(const docdb::Structured &msg) {
+}
+
+void Peer::on_count(const docdb::Structured &msg) {
+}
+
+void Peer::on_close(const docdb::Structured &msg) {
 }
 
 }

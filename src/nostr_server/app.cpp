@@ -16,6 +16,8 @@ App::App(const Config &cfg)
         :static_page(cfg.web_document_root, "index.html")
         ,_db(docdb::Database::create(cfg.database_path, cfg.leveldb_options))
         ,_storage(_db,"events")
+        ,_index_by_id(_storage,"by_id")
+        ,_index_replaceable(_storage, "replaceable")
 {
 
 }
@@ -32,6 +34,12 @@ void App::init_handlers(coroserver::http::Server &server) {
     });
 }
 
+bool IApp::Filter::test(const docdb::Structured &doc) const {
+}
 
+
+std::vector<docdb::DocID> App::find_in_index(const Filter &filter) const {
+
+}
 
 } /* namespace nostr_server */

@@ -7,6 +7,7 @@
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
 
+#include <array>
 
 namespace nostr_server {
 
@@ -16,6 +17,8 @@ public:
 
     static cocls::future<bool> client_main(coroserver::http::ServerRequest &req, PApp app);
 
+    using Subscriptions = std::vector<std::pair<std::string, IApp::Filter> >;
+
 protected:
     Peer(coroserver::http::ServerRequest &req, PApp app);
 
@@ -23,14 +26,30 @@ protected:
     PApp _app;
     EventSubscriber _subscriber;
     coroserver::ws::Stream _stream;
+    mutable std::mutex _mx;
 
+
+    Subscriptions _subscriptions;
 
     cocls::future<void> listen_publisher();
 
 
     void processMessage(std::string_view msg_text);
 
+    void send(const docdb::Structured &msgdata);
+
     std::string _log_buffer;
+
+
+    void on_event(docdb::Structured &msg);
+    void on_req(const docdb::Structured &msg);
+    void on_count(const docdb::Structured &msg);
+    void on_close(const docdb::Structured &msg);
+
+    template<typename Fn>
+    void filter_event(const docdb::Structured &doc, Fn fn) const;
+
+
 
 };
 
