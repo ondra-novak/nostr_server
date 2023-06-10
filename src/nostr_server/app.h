@@ -7,7 +7,11 @@
 #include "iapp.h"
 
 
+
 #include <docdb/json.h>
+#include <docdb/database.h>
+#include <docdb/storage.h>
+#include <docdb/indexer.h>
 #include <cocls/publisher.h>
 #include <coroserver/http_server.h>
 #include <coroserver/websocket_stream.h>
@@ -31,6 +35,15 @@ protected:
     coroserver::http::StaticPage static_page;
 
     EventPublisher event_publish;
+    docdb::PDatabase _db;
+    using DocumentType =docdb::StructuredDocument<docdb::Structured::use_string_view> ;
+
+    using Storage = docdb::Storage<DocumentType>;
+    using IndexById = docdb::Indexer<Storage,[](auto emit, const Event &ev){
+        emit(ev["id"].as<std::string_view>());
+    },1,docdb::IndexType::unique_hide_dup>;
+
+    Storage _storage;
 
 
 

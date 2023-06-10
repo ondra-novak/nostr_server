@@ -9,6 +9,7 @@
 #include <coroserver/http_ws_server.h>
 #include <coroserver/io_context.h>
 #include <coroserver/signal.h>
+#include <leveldb/cache.h>
 
 #include <csignal>
 #include <iostream>
@@ -34,6 +35,18 @@ static void show_help(const char *argv0) {
     exit(0);
 }
 
+static std::unique_ptr<leveldb::Cache> leveldb_cache;
+
+
+void read_leveldb_options(const ondra_shared::IniConfig::Section &ini, leveldb::Options &opts) {
+    leveldb_cache = std::unique_ptr<leveldb::Cache>(leveldb::NewLRUCache(ini["rlu_cache_mb"].getUInt(8)*1024*1024));
+    opts.block_cache = leveldb_cache.get();
+    opts.max_file_size=  ini["max_file_size_mb"].getUInt(2)*1024*1024;
+    opts.create_if_missing =  ini["create_if_missing"].getBool(true);
+    opts.write_buffer_size = ini["write_buffer_size_mb"].getUInt(4)*1024*1024;
+    opts.max_open_files = ini["max_open_files"].getUInt(1000);
+}
+
 nostr_server::Config init_cfg(int argc, char **argv) {
     auto defcfg = getDefaultConfigPath(argv[0]);
     const char *params = "hf:";
@@ -49,15 +62,23 @@ nostr_server::Config init_cfg(int argc, char **argv) {
 
     ondra_shared::IniConfig cfg;
     cfg.load(defcfg);
+    auto cfgpath = defcfg.parent_path();
 
     auto main = cfg["server"];
+    auto db = cfg["database"];
 
 
     nostr_server::Config outcfg;
-    outcfg.listen_addr = main.mandatory["listen"].getString();
-    outcfg.threads = main.mandatory["threads"].getUInt();
-    auto doc_root_path = std::filesystem::path(main["listen"].getCurPath()).parent_path() / "www";
-    outcfg.web_document_root = main["document_root"].getPath(doc_root_path);
+    outcfg.listen_addr = main["listen"].getString("localhost:10000");
+    outcfg.threads = main["threads"].getUInt(4);
+    auto doc_root_path = cfgpath.parent_path() / "www";
+    auto db_root_path = cfgpath.parent_path() / "data";
+    outcfg.web_document_root = main["web_document_root"].getPath(doc_root_path);
+
+
+    outcfg.database_path = db["path"].getPath(db_root_path);
+    read_leveldb_options(db,outcfg.leveldb_options);
+
     return outcfg;
 }
 

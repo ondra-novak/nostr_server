@@ -14,6 +14,8 @@ namespace nostr_server {
 
 App::App(const Config &cfg)
         :static_page(cfg.web_document_root, "index.html")
+        ,_db(docdb::Database::create(cfg.database_path, cfg.leveldb_options))
+        ,_storage(_db,"events")
 {
 
 }

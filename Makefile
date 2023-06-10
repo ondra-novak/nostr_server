@@ -26,12 +26,12 @@ $(FORCE_BUILD_PROFILE):
 	echo $(FORCE_BUILD_PROFILE)
 	$(file >.current_profile.mk,BUILD_PROFILE=$(BUILD_PROFILE))
 
-build/debug/Makefile:  $(BUILD_PROFILE) $(FORCE_BUILD_PROFILE) | build/debug/conf build/debug/log build/debug/data
+build/debug/Makefile:  $(BUILD_PROFILE) $(FORCE_BUILD_PROFILE) | build/debug/conf build/debug/log build/debug/data build/debug/www
 	mkdir -p build/debug/log
 	rm -f build/debug/CMakeCache.txt
 	cmake -G "Unix Makefiles" -S . -B build/debug -DCMAKE_BUILD_TYPE=Debug `grep -E -v "^[[:blank:]]*#" $(BUILD_PROFILE)`
 
-build/release/Makefile: $(BUILD_PROFILE) $(FORCE_BUILD_PROFILE) | build/release/conf build/release/log build/release/data
+build/release/Makefile: $(BUILD_PROFILE) $(FORCE_BUILD_PROFILE) | build/release/conf build/release/log build/release/data build/release/www
 	mkdir -p build/release/log
 	rm -f build/release/CMakeCache.txt
 	cmake -G "Unix Makefiles" -S . -B build/release -DCMAKE_BUILD_TYPE=Release `grep -E -v "^[[:blank:]]*#" $(BUILD_PROFILE)`
@@ -40,6 +40,10 @@ build/debug/conf: | build/debug conf
 	cd build/debug; ln -s ../../conf conf
 build/release/conf: | build/release conf 
 	cd build/release; ln -s ../../conf conf
+build/debug/www: | build/debug www 
+	cd build/debug; ln -s ../../www www
+build/release/www: | build/release www 
+	cd build/release; ln -s ../../www www
 
 build/debug/data: | build/debug data 
 	cd build/debug; ln -s ../../data data

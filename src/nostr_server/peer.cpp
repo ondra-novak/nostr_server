@@ -33,6 +33,10 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 }
 
 cocls::future<void> Peer::listen_publisher() {
+    bool nx = co_await _subscriber.next();
+    while (nx) {
+        nx = co_await _subscriber.next();
+    }
     co_return;
 }
 

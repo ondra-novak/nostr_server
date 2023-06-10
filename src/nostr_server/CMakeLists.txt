@@ -8,6 +8,7 @@ add_executable(nostr_server
 
 target_link_libraries(nostr_server
     coroserver
+    leveldb
     secp256k1    
 	${STANDARD_LIBRARIES}
 )
