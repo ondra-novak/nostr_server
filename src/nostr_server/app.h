@@ -38,6 +38,18 @@ protected:
         static constexpr int revision = 2;
         template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
     };
+    struct IndexByPubkeyHashTimeFn {
+        static constexpr int revision = 1;
+        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+    };
+    struct IndexTagValueHashTimeFn {
+        static constexpr int revision = 1;
+        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+    };
+    struct IndexKindTimeFn {
+        static constexpr int revision = 1;
+        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+    };
     struct IndexByAuthorKindFn {
         static constexpr int revision = 2;
         template<typename Emit> void operator()(Emit emit, const Event &ev) const;
@@ -47,6 +59,9 @@ protected:
 
     using IndexById = docdb::Indexer<Storage,IndexByIdHashFn,docdb::IndexType::multi>;
     using IndexByAuthorKind = docdb::Indexer<Storage,IndexByAuthorKindFn,docdb::IndexType::unique, TimestampRowDef>;
+    using IndexByPubkeyTime = docdb::Indexer<Storage,IndexByPubkeyHashTimeFn,docdb::IndexType::multi>;
+    using IndexTagValueHashTime = docdb::Indexer<Storage,IndexTagValueHashTimeFn,docdb::IndexType::multi>;
+    using IndexKindTime = docdb::Indexer<Storage,IndexKindTimeFn,docdb::IndexType::multi>;
 
 
 
@@ -57,11 +72,16 @@ protected:
 
     Storage _storage;
     IndexById _index_by_id;
+    IndexByPubkeyTime _index_pubkey_time;
     IndexByAuthorKind _index_replaceable;
+    IndexTagValueHashTime _index_tag_value_time;
+    IndexKindTime _index_kind_time;
 
 
 
 };
+
+
 
 } /* namespace nostr_server */
 

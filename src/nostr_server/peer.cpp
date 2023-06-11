@@ -38,7 +38,14 @@ template<typename Fn>
 void Peer::filter_event(const docdb::Structured &doc, Fn fn) const  {
     std::lock_guard _(_mx);
     for (const auto &sbs: _subscriptions) {
-        if (sbs.second.test(doc)) {
+        bool found = false;
+        for (const auto &f: sbs.second) {
+            if (f.test(doc)) {
+                found = true;
+                break;
+            }
+        }
+        if (found) {
             fn(sbs.first);
         }
     }
@@ -124,13 +131,58 @@ void Peer::on_event(docdb::Structured &msg) {
 
 }
 
+
+
 void Peer::on_req(const docdb::Structured &msg) {
+    std::lock_guard _(_mx);
+
+    const auto &rq = msg.array();
+    std::vector<IApp::Filter> flts;
+    std::string subid = rq[1].as<std::string>();
+    auto filter = IApp::Filter::create(rq[2]);
+    flts.push_back(filter);
+    std::vector<docdb::DocID> ids = _app->find_in_index(filter);
+    std::vector<docdb::DocID> b;
+    for (std::size_t i = 3; i < ids.size(); i++) {
+        auto filter = IApp::Filter::create(rq[i]);
+        flts.push_back(filter);
+        std::vector<docdb::DocID> a = _app->find_in_index(filter);
+        merge_ids(ids, a, b);
+    }
+    if (filter.limit.has_value() && *filter.limit < ids.size()) {
+        ids.resize(*filter.limit);
+    }
+
+    auto &storage = _app->get_storage();
+    for (const auto &id: ids) {
+        auto doc = storage.find(id);
+        if (doc) {
+            for (const auto &f: flts) {
+                if (f.test(doc->content)) {
+                    send({commands[Command::EVENT], subid, &doc->content});
+                    break;
+                }
+            }
+        }
+    }
+
+    send({commands[Command::EOSE], subid});
+
+    _subscriptions.emplace_back(subid, std::move(flts));
+
 }
 
 void Peer::on_count(const docdb::Structured &msg) {
 }
 
 void Peer::on_close(const docdb::Structured &msg) {
+    std::lock_guard _(_mx);
+    std::string id = msg[1].as<std::string>();
+    auto iter = std::remove_if(_subscriptions.begin(), _subscriptions.end(),
+            [&](const auto &s) {
+        return s.first == id;
+    });
+    _subscriptions.erase(iter, _subscriptions.end());
 }
 
 }

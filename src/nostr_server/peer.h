@@ -17,7 +17,7 @@ public:
 
     static cocls::future<bool> client_main(coroserver::http::ServerRequest &req, PApp app);
 
-    using Subscriptions = std::vector<std::pair<std::string, IApp::Filter> >;
+    using Subscriptions = std::vector<std::pair<std::string,std::vector<IApp::Filter> > >;
 
 protected:
     Peer(coroserver::http::ServerRequest &req, PApp app);
