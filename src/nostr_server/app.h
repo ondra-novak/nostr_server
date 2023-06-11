@@ -29,10 +29,27 @@ public:
 
     virtual EventPublisher &get_publisher() override {return event_publish;}
     virtual Storage &get_storage() override {return _storage;}
-    virtual const IndexByAuthorKind &get_index_replaceable() const override {return _index_replaceable;}
+    virtual docdb::DocID doc_to_replace(const Event &event) const override;
     virtual std::vector<docdb::DocID> find_in_index(const Filter &filter) const;
 protected:
     coroserver::http::StaticPage static_page;
+
+    struct IndexByIdHashFn {
+        static constexpr int revision = 2;
+        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+    };
+    struct IndexByAuthorKindFn {
+        static constexpr int revision = 2;
+        template<typename Emit> void operator()(Emit emit, const Event &ev) const;
+    };
+
+    struct IndexByAuthorKindFn;
+
+    using IndexById = docdb::Indexer<Storage,IndexByIdHashFn,docdb::IndexType::multi>;
+    using IndexByAuthorKind = docdb::Indexer<Storage,IndexByAuthorKindFn,docdb::IndexType::unique, TimestampRowDef>;
+
+
+
 
     EventPublisher event_publish;
     docdb::PDatabase _db;

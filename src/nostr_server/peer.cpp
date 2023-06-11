@@ -112,25 +112,10 @@ void Peer::on_event(docdb::Structured &msg) {
             _app->get_publisher().publish(std::move(doc));
             return;
         }
-        IApp::IndexByAuthorKindFn idx;
-        docdb::DocID to_replace =0;
-        idx([&](docdb::Key &k){
-            auto r = _app->get_index_replaceable().find(k);
-            if (r) {
-                to_replace = r->id;
-                auto prev = storage.find(to_replace);
-                if (prev) {
-                    auto tm1 = doc["created_at"].as<std::time_t>();
-                    auto tm2 = prev->content["created_at"].as<std::time_t>();
-                    if (tm1<=tm2) {
-                        send({commands[Command::OK], false, "Event replaced too fast"});
-                        return;
-                    }
-                }
-            }
-        }, doc);
-
-        storage.put(doc, to_replace);
+        auto to_replace = _app->doc_to_replace(doc);
+        if (to_replace != docdb::DocID(-1)) {
+            storage.put(doc, to_replace);
+        }
         _app->get_publisher().publish(std::move(doc));
         send({commands[Command::OK], true});
     } catch (const std::exception &e) {
