@@ -6,6 +6,7 @@
 #include <docdb/database.h>
 #include <docdb/storage.h>
 #include <docdb/indexer.h>
+#include <docdb/binops.h>
 
 #include <optional>
 
@@ -26,20 +27,25 @@ public:
     using IndexViewByAuthorKindTag = docdb::IndexView<Storage,TimestampRowDef, docdb::IndexType::unique>;
 
 
+    using StringOptions = std::vector<std::string>;
+    using NumberOptions = std::vector<unsigned int>;
 
     struct Filter {
-        std::vector<std::string> ids;
-        std::vector<std::string> authors;
-        std::vector<unsigned int> kinds;
-        std::vector<std::pair<char, std::string> > tags; ///<ordered
+        StringOptions ids;
+        StringOptions authors;
+        NumberOptions kinds;
+        std::map<char,StringOptions> tags;
         std::optional<std::time_t> since;
         std::optional<std::time_t> until;
         std::optional<unsigned int> limit;
+        std::uint64_t tag_mask = 0;
 
         bool test(const docdb::Structured &doc) const;
         static Filter create(const docdb::Structured &f);
     };
 
+
+    using DocIDList = std::vector<docdb::DocID>;
 
     virtual ~IApp() = default;
     virtual EventPublisher &get_publisher() = 0;
@@ -51,13 +57,16 @@ public:
      * @param filter filter
      * @return candidates
      */
-    virtual std::vector<docdb::DocID> find_in_index(const Filter &filter) const = 0;
+    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters) const = 0;
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
+
+    static void merge_ids(DocIDList &out, DocIDList &a, DocIDList  &tmp);
+    static void intersection_ids(DocIDList &out, DocIDList &a, DocIDList &tmp);
 };
 
 using PApp = std::shared_ptr<IApp>;
 
-void merge_ids(std::vector<docdb::DocID> &out, std::vector<docdb::DocID> &a, std::vector<docdb::DocID> &b);
+
 
 }
 

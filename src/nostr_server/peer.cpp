@@ -17,6 +17,7 @@ Peer::Peer(coroserver::http::ServerRequest &req, PApp app)
 using namespace coroserver::ws;
 
 cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp app) {
+    std::exception_ptr e;
     Peer me(req, app);
     bool res =co_await Server::accept(me._stream, me._req);
     if (!res) co_return true;
@@ -24,13 +25,18 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
     me._req.log_message("Connected client");
 
     auto listener = me.listen_publisher();
-    while (true) {
-        Message msg = co_await me._stream.read();
-        if (msg.type == Type::text) me.processMessage(msg.payload);
-        else if (msg.type == Type::connClose) break;
+    try {
+        while (true) {
+            Message msg = co_await me._stream.read();
+            if (msg.type == Type::text) me.processMessage(msg.payload);
+            else if (msg.type == Type::connClose) break;
+        }
+    } catch (...) {
+        e = std::current_exception();
     }
     me._subscriber.kick_me();
     co_await listener;
+    if (e) std::rethrow_exception(e);
     co_return true;
 }
 
@@ -139,31 +145,23 @@ void Peer::on_req(const docdb::Structured &msg) {
     const auto &rq = msg.array();
     std::vector<IApp::Filter> flts;
     std::string subid = rq[1].as<std::string>();
-    auto filter = IApp::Filter::create(rq[2]);
-    flts.push_back(filter);
-    std::vector<docdb::DocID> ids = _app->find_in_index(filter);
-    std::vector<docdb::DocID> b;
-    for (std::size_t i = 3; i < ids.size(); i++) {
-        auto filter = IApp::Filter::create(rq[i]);
+    for (std::size_t pos = 2; pos < rq.size(); ++pos) {
+        auto filter = IApp::Filter::create(rq[pos]);
         flts.push_back(filter);
-        std::vector<docdb::DocID> a = _app->find_in_index(filter);
-        merge_ids(ids, a, b);
     }
-    if (filter.limit.has_value() && *filter.limit < ids.size()) {
-        ids.resize(*filter.limit);
-    }
-
     auto &storage = _app->get_storage();
-    for (const auto &id: ids) {
-        auto doc = storage.find(id);
-        if (doc) {
-            for (const auto &f: flts) {
-                if (f.test(doc->content)) {
-                    send({commands[Command::EVENT], subid, &doc->content});
-                    break;
+    bool fnd = _app->find_in_index(_rscalc, flts);
+    if (fnd) {
+        _rscalc.documents(storage, [&](const auto &doc){
+            if (doc) {
+                for (const auto &f: flts) {
+                    if (f.test(doc->content)) {
+                        send({commands[Command::EVENT], subid, &doc->content});
+                        break;
+                    }
                 }
             }
-        }
+        });
     }
 
     send({commands[Command::EOSE], subid});

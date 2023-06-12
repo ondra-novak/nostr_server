@@ -26,6 +26,7 @@ protected:
     PApp _app;
     EventSubscriber _subscriber;
     coroserver::ws::Stream _stream;
+    docdb::RecordSetCalculator _rscalc;
     mutable std::mutex _mx;
 
 
