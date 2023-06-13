@@ -103,7 +103,7 @@ void App::IndexKindTimeFn::operator ()(Emit emit, const Event &ev) const {
 }
 
 
-static int tag2bit(char tag) {
+int IApp::Filter::tag2bit(char tag) {
     return (tag >= '0' && tag <= '9')*(tag -'0'+1)
          + (tag >= 'A' && tag <= 'Z')*(tag -'A'+11)
          + (tag >= 'a' && tag <= 'z')*(tag -'a'+37) - 1;

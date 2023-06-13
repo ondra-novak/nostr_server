@@ -23,4 +23,4 @@ Experimental standalone NOSTR relay for testing, extending - it uses LevelDB as 
 * groups - a group is account which reposts received events
 * replication - master-to-master replication between multiple relays
 * NIP-05 on server
-* login to server, signer tool, user databas
+* login to server, signer tool, user database

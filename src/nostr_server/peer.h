@@ -47,6 +47,8 @@ protected:
     void on_count(const docdb::Structured &msg);
     void on_close(const docdb::Structured &msg);
 
+    void event_deletion(Event &&event);
+
     template<typename Fn>
     void filter_event(const docdb::Structured &doc, Fn fn) const;
 

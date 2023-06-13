@@ -42,6 +42,7 @@ public:
 
         bool test(const docdb::Structured &doc) const;
         static Filter create(const docdb::Structured &f);
+        static int tag2bit(char tag);
     };
 
 

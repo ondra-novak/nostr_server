@@ -119,17 +119,21 @@ void Peer::send(const docdb::Structured &msgdata) {
 void Peer::on_event(docdb::Structured &msg) {
     try {
         auto &storage = _app->get_storage();
-        docdb::Structured doc(std::move(msg.at(1)));
-        auto kind = doc["kind"].as<unsigned int>();
+        docdb::Structured event(std::move(msg.at(1)));
+        auto kind = event["kind"].as<unsigned int>();
         if (kind >= 20000 && kind < 30000) { //empheral event  - do not store
-            _app->get_publisher().publish(std::move(doc));
+            _app->get_publisher().publish(std::move(event));
             return;
         }
-        auto to_replace = _app->doc_to_replace(doc);
-        if (to_replace != docdb::DocID(-1)) {
-            storage.put(doc, to_replace);
+        if (kind == 5) {
+            event_deletion(std::move(event));
+            return;
         }
-        _app->get_publisher().publish(std::move(doc));
+        auto to_replace = _app->doc_to_replace(event);
+        if (to_replace != docdb::DocID(-1)) {
+            storage.put(event, to_replace);
+        }
+        _app->get_publisher().publish(std::move(event));
         send({commands[Command::OK], true});
     } catch (const std::exception &e) {
         send({commands[Command::OK], false, e.what()});
@@ -161,7 +165,7 @@ void Peer::on_req(const docdb::Structured &msg) {
     bool fnd = _app->find_in_index(_rscalc, flts);
 
     auto filter_docs = [&](auto fn) {
-        _rscalc.documents(storage, [&](const auto &doc){
+        _rscalc.documents(storage, [&](docdb::DocID id, const auto &doc){
             if (doc) {
                 for (const auto &f: flts) {
                     if (f.test(doc->content)) {
@@ -169,6 +173,9 @@ void Peer::on_req(const docdb::Structured &msg) {
                        break;
                     }
                 }
+            } else {
+                std::string error = "Document missing: " + std::to_string(id);
+                _req.log_message(error, 10);
             }
         });
     };
@@ -196,17 +203,6 @@ void Peer::on_req(const docdb::Structured &msg) {
                 send({commands[Command::EVENT], subid, &doc});
             });
         }
-            //otherwise much simplier operation
-            _rscalc.documents(storage, [&](const auto &doc){
-            if (doc) {
-                for (const auto &f: flts) {
-                    if (f.test(doc->content)) {
-
-                        break;
-                    }
-                }
-            }
-        });
     }
 
     send({commands[Command::EOSE], subid});
@@ -216,6 +212,19 @@ void Peer::on_req(const docdb::Structured &msg) {
 }
 
 void Peer::on_count(const docdb::Structured &msg) {
+    const auto &rq = msg.array();
+    std::vector<IApp::Filter> flts;
+    std::string subid = rq[1].as<std::string>();
+    for (std::size_t pos = 2; pos < rq.size(); ++pos) {
+       auto filter = IApp::Filter::create(rq[pos]);
+       flts.push_back(filter);
+    }
+    bool fnd = _app->find_in_index(_rscalc, flts);
+    std::intmax_t count = 0;
+    if (fnd) {
+        count = _rscalc.top().size();
+    }
+    send({commands[Command::COUNT], subid, {{"count", count}}});
 }
 
 void Peer::on_close(const docdb::Structured &msg) {
@@ -226,6 +235,42 @@ void Peer::on_close(const docdb::Structured &msg) {
         return s.first == id;
     });
     _subscriptions.erase(iter, _subscriptions.end());
+}
+
+void Peer::event_deletion(Event &&event) {
+    bool deleted_something = false;
+    auto pubkey = event["pubkey"].as<std::string_view>();
+    IApp::Filter flt;
+    for (const auto &item: event["tags"].array()) {
+        if (item[0].as<std::string_view>() == "e") {
+           flt.ids.push_back(item[1].as<std::string>());
+        }
+    }
+    auto &storage = _app->get_storage();
+    docdb::Batch b;
+    if (!flt.ids.empty()) {
+        bool ok= _app->find_in_index(_rscalc, {flt});
+        if (ok) {
+            _rscalc.documents(_app->get_storage(), [&](docdb::DocID id, const auto &r){
+               if (r)  {
+                   const Event &ev = r->content;
+                   std::string p = ev["pubkey"].as<std::string>();
+                  if (p != pubkey) {
+                      throw std::runtime_error("pubkey missmatch");
+                  }
+                  storage.erase(b, id);
+                  deleted_something = true;
+               }
+            });
+        }
+    }
+
+    if (deleted_something) {
+        storage.put(b, event);
+        storage.get_db()->commit_batch(b);
+        _app->get_publisher().publish(std::move(event));
+    }
+    send({commands[Command::OK], true});
 }
 
 }
