@@ -116,6 +116,7 @@ void Peer::send(const docdb::Structured &msgdata) {
     _stream.write({json});
 }
 
+
 void Peer::on_event(docdb::Structured &msg) {
     try {
         auto &storage = _app->get_storage();

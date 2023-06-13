@@ -35,6 +35,7 @@ public:
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
     virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const ;
+    virtual docdb::PDatabase get_database() const {return _db;}
 protected:
     coroserver::http::StaticPage static_page;
 
