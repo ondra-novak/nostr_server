@@ -66,6 +66,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
 
     auto main = cfg["server"];
     auto db = cfg["database"];
+    auto ssl = cfg["ssl"];
 
 
     nostr_server::Config outcfg;
@@ -75,21 +76,47 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     auto db_root_path = cfgpath.parent_path() / "data";
     outcfg.web_document_root = main["web_document_root"].getPath(doc_root_path);
 
-
     outcfg.database_path = db["path"].getPath(db_root_path);
     read_leveldb_options(db,outcfg.leveldb_options);
+
+    std::string cert_chain = ssl["cert_chain_file"].getPath();
+    std::string priv_key = ssl["priv_key_file"].getPath();
+    std::string_view ssl_listen_addr = ssl["listen"].getString("localhost:10001");
+
+    if (!cert_chain.empty() && !priv_key.empty() && !ssl_listen_addr.empty()) {
+        outcfg.cert.emplace();
+        outcfg.cert->load_cert(std::string(cert_chain));
+        outcfg.cert->load_priv_key(std::string(priv_key));
+        outcfg.ssl_listen_addr.append(ssl_listen_addr);
+    }
+
 
     return outcfg;
 }
 
 int main(int argc, char **argv) {
+    coroserver::ssl::Context::initSSL();
     try {
         auto cfg = init_cfg(argc, argv);
 
         auto addrs = coroserver::PeerName::lookup(cfg.listen_addr,"");
+
+        if (cfg.cert.has_value()) {
+            auto secure_addrs = coroserver::PeerName::lookup(cfg.ssl_listen_addr,"");
+            for (auto &x: secure_addrs) {
+                x.set_group_id(1);
+                addrs.push_back(std::move(x));
+            }
+        }
         coroserver::ContextIO ctx = coroserver::ContextIO::create(cfg.threads);
         auto listener = ctx.accept(std::move(addrs));
-        coroserver::http::Server server;
+        coroserver::http::Server::RequestFactory rf;
+        if (cfg.cert.has_value()) {
+            auto sslctx = coroserver::ssl::Context::init_server();
+            sslctx.set_certificate(*cfg.cert);
+            rf = coroserver::http::Server::secure(sslctx, 1);
+        }
+        coroserver::http::Server server(rf);
         auto app = std::make_shared<nostr_server::App>(cfg);
         app->init_handlers(server);
 

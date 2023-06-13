@@ -31,6 +31,7 @@ App::App(const Config &cfg)
 
 void App::init_handlers(coroserver::http::Server &server) {
     server.set_handler("/", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<bool> {
+        req.add_header(coroserver::http::strtable::hdr_access_control_allow_origin, "*");
         if (vpath.empty() && req[coroserver::http::strtable::hdr_upgrade] == coroserver::http::strtable::val_websocket) {
             return Peer::client_main(req, me);
         } else {
@@ -390,9 +391,10 @@ bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filt
             for (const auto &[tag, values]: f.tags) {
                 bool rr = false;
                 for (const auto &v: values) {
+                    unsigned char t = tag;
                     std::size_t h = hasher(v);
-                    docdb::Key from(h);
-                    docdb::Key to(h);
+                    docdb::Key from(t,h);
+                    docdb::Key to(t,h);
                     append_time(f,from, to);
                     calc.push(_index_tag_value_time.select_between(from, to));
                     calc.OR(rr);

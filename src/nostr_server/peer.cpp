@@ -143,20 +143,65 @@ void Peer::on_req(const docdb::Structured &msg) {
     std::lock_guard _(_mx);
 
     const auto &rq = msg.array();
+    std::size_t limit = 0;
     std::vector<IApp::Filter> flts;
     std::string subid = rq[1].as<std::string>();
     for (std::size_t pos = 2; pos < rq.size(); ++pos) {
         auto filter = IApp::Filter::create(rq[pos]);
+        if (filter.limit.has_value()) {
+            limit = std::max<std::size_t>(limit, *filter.limit);
+        } else {
+            limit = static_cast<std::size_t>(-1);
+        }
         flts.push_back(filter);
     }
+
+
     auto &storage = _app->get_storage();
     bool fnd = _app->find_in_index(_rscalc, flts);
-    if (fnd) {
+
+    auto filter_docs = [&](auto fn) {
         _rscalc.documents(storage, [&](const auto &doc){
             if (doc) {
                 for (const auto &f: flts) {
                     if (f.test(doc->content)) {
-                        send({commands[Command::EVENT], subid, &doc->content});
+                       fn(doc->content);
+                       break;
+                    }
+                }
+            }
+        });
+    };
+
+
+    if (fnd) {
+        if (limit > 0 && _rscalc.top().size()>limit) {
+            std::vector<Event> events;
+            filter_docs([&](auto &doc){
+                events.push_back(std::move(doc));
+            });
+            std::sort(events.begin(), events.end(), [](const Event &a, const Event &b){
+                return a["created_at"].as<std::time_t>() < b["created_at"].as<std::time_t>();
+            });
+            auto iter = events.begin();
+            if (events.size()>limit) {
+                std::advance(iter, events.size()-limit);
+            }
+            while (iter != events.end()) {
+                send({commands[Command::EVENT], subid, &(*iter)});
+                ++iter;
+            }
+        } else {
+            filter_docs([&](const auto &doc){
+                send({commands[Command::EVENT], subid, &doc});
+            });
+        }
+            //otherwise much simplier operation
+            _rscalc.documents(storage, [&](const auto &doc){
+            if (doc) {
+                for (const auto &f: flts) {
+                    if (f.test(doc->content)) {
+
                         break;
                     }
                 }
