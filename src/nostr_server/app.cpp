@@ -8,12 +8,16 @@
 #include "app.h"
 #include "peer.h"
 #include "nostr_server_version.h"
+#include "fulltext.h"
 #include <coroserver/http_ws_server.h>
 #include <docdb/json.h>
 
+
+#include "fulltext.h"
 namespace nostr_server {
 
-const Event App::supported_nips = {1};
+const Event App::supported_nips = {1,9,11,12,16,20,33,45,50};
+//to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
 
@@ -30,6 +34,7 @@ App::App(const Config &cfg)
         ,_index_replaceable(_storage, "replaceable")
         ,_index_tag_value_time(_storage, "tag_value_time")
         ,_index_kind_time(_storage, "kind_time")
+        ,_index_fulltext(_storage, "fulltext")
 {
 
 }
@@ -42,11 +47,11 @@ void App::init_handlers(coroserver::http::Server &server) {
         if (vpath.empty() && req[coroserver::http::strtable::hdr_upgrade] == coroserver::http::strtable::val_websocket) {
             return Peer::client_main(req, me);
         } else {
-            auto ctx = req[coroserver::http::strtable::hdr_accept];
-            if (ctx == "application/nostr+json") {
+/*            auto ctx = req[coroserver::http::strtable::hdr_accept];
+         if (ctx == "application/nostr+json") {*/
                 return me->send_infodoc(req);
-            }
-            return me->static_page(req, vpath);
+/*            }
+            return me->static_page(req, vpath);*/
         }
     });
 }
@@ -330,6 +335,8 @@ IApp::Filter IApp::Filter::create(const docdb::Structured &f) {
             out.until = v.as<std::time_t>();
         } else if (k == "limit") {
             out.limit = v.as<unsigned int>();
+        } else if (k == "search") {
+            out.ft_search = v.as<std::string_view>();
         }
     }
     return out;
@@ -366,15 +373,91 @@ static void append_time(const IApp::Filter &f, docdb::Key &from, docdb::Key &to)
 };
 
 
-bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters) const {
+void App::merge_ft(FTRList &out, FTRList &a, FTRList &tmp) {
+    std::swap(out, tmp);
+    out.clear();
+    auto iter_a = a.begin();
+    auto iter_t = tmp.begin();
+    auto end_a = a.end();
+    auto end_t = tmp.end();
+    while (iter_a != end_a && iter_t != end_t) {
+        const auto &itm_a = *iter_a;
+        const auto &itm_t = *iter_t;
+        if (itm_a.first < itm_t.first) {
+            out.emplace_back(itm_a.first, itm_a.second+100);
+            ++iter_a;
+        } else if (itm_a.first > itm_t.first) {
+            out.emplace_back(itm_t.first, itm_t.second+100);
+            ++iter_t;
+        } else {
+            out.emplace_back(itm_t.first, itm_t.second+itm_a.second);
+            ++iter_a;
+            ++iter_t;
+        }
+    }
+    while (iter_a != end_a) {
+        const auto &itm_a = *iter_a;
+        out.emplace_back(itm_a.first, itm_a.second+100);
+        ++iter_a;
+    }
+    while (iter_t != end_t) {
+        const auto &itm_t = *iter_t;
+        out.emplace_back(itm_t.first, itm_t.second+100);
+        ++iter_t;
+    }
+
+}
+
+void App::dedup_ft(FTRList &x) {
+    if (x.empty()) return;
+    auto i = x.begin();
+    auto j = i;
+    ++i;
+    auto e = std::remove_if(i,x.end(),[&](const FulltextRelevance &rl) {
+        if (rl.first == j->first) {
+            j->second = std::min(j->second, rl.second);
+            return true;
+        } else {
+            return false;
+        }
+    });
+    x.erase(e, x.end());
+}
+
+bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, FTRList &&relevance) const {
     calc.clear();
+    relevance.clear();
     std::hash<std::string_view> hasher;
+    std::vector<FulltextRelevance> ftr2,ftr3;
 
     docdb::PSnapshot snap = _storage.get_db()->make_snapshot();
 
     bool b = false;
     for (const auto &f: filters) {
         bool r = false;
+        if (!f.ft_search.empty()) {
+            std::vector<WordToken> wt;
+            tokenize_text(f.ft_search, wt);
+            if (!wt.empty()) {
+               for (const WordToken &tk: wt) {
+                   for (const auto &row : _index_fulltext.select(docdb::prefix(tk.first))) {
+                       auto [rel] = row.value.get<unsigned char>();
+                       auto [k] = row.key.get<std::string_view>();
+                       rel *= (k.length() - tk.first.length())+1;
+                       ftr2.push_back({row.id, rel});
+                   }
+                   std::sort(ftr2.begin(), ftr2.end());
+                   dedup_ft(ftr2);
+                   merge_ft(relevance, ftr2, ftr3);
+               }
+               auto s = calc.get_empty_set();
+               std::transform(relevance.begin(), relevance.end(), std::back_inserter(s),[&](const auto &x) {
+                   return x.first;
+               });
+               calc.push(std::move(s));
+               calc.AND(r);
+            }
+        }
         if (!f.ids.empty()) {
            auto s = calc.get_empty_set();
            for (const auto &a: f.ids) {
@@ -448,5 +531,17 @@ cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
     std::string json = doc.to_json();
     return req.send(std::move(json));
 }
+
+
+
+template<typename Emit>
+inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) const {
+    std::vector<WordToken> tokens;
+    tokenize_text(ev["content"].as<std::string_view>(), tokens);
+    for (const auto &x: tokens) {
+        emit(x.first, x.second);
+    }
+}
+
 
 } /* namespace nostr_server */

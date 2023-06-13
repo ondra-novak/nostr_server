@@ -34,7 +34,7 @@ public:
     virtual EventPublisher &get_publisher() override {return event_publish;}
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
-    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters) const override;
+    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const ;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -59,6 +59,11 @@ protected:
         template<typename Emit> void operator()(Emit emit, const Event &ev) const;
     };
 
+    struct IndexForFulltextFn{
+        static constexpr int revision = 2;
+        template<typename Emit> void operator()(Emit emit, const Event &ev) const;
+    };
+
     struct IndexByAuthorKindFn;
 
     using IndexById = docdb::Indexer<Storage,IndexByIdFn,docdb::IndexType::unique>;
@@ -66,6 +71,7 @@ protected:
     using IndexByPubkeyTime = docdb::Indexer<Storage,IndexByPubkeyHashTimeFn,docdb::IndexType::multi>;
     using IndexTagValueHashTime = docdb::Indexer<Storage,IndexTagValueHashTimeFn,docdb::IndexType::multi>;
     using IndexKindTime = docdb::Indexer<Storage,IndexKindTimeFn,docdb::IndexType::multi>;
+    using IndexForFulltext = docdb::Indexer<Storage,IndexForFulltextFn,docdb::IndexType::multi>;
 
 
 
@@ -81,8 +87,12 @@ protected:
     IndexByAuthorKind _index_replaceable;
     IndexTagValueHashTime _index_tag_value_time;
     IndexKindTime _index_kind_time;
+    IndexForFulltext _index_fulltext;
 
     cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
+
+    static void merge_ft(FTRList &out, FTRList &a, FTRList &tmp);
+    static void dedup_ft(FTRList &x);
 
 
 };

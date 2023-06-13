@@ -39,12 +39,16 @@ public:
         std::optional<std::time_t> until;
         std::optional<unsigned int> limit;
         std::uint64_t tag_mask = 0;
+        std::string ft_search;
 
         bool test(const docdb::Structured &doc) const;
         static Filter create(const docdb::Structured &f);
         static int tag2bit(char tag);
     };
 
+
+    using FulltextRelevance  = std::pair<docdb::DocID, unsigned int>;
+    using FTRList = std::vector<FulltextRelevance>;
 
     using DocIDList = std::vector<docdb::DocID>;
 
@@ -58,7 +62,7 @@ public:
      * @param filter filter
      * @return candidates
      */
-    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters) const = 0;
+    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, FTRList &&relevance) const = 0;
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
 
     static void merge_ids(DocIDList &out, DocIDList &a, DocIDList  &tmp);

@@ -173,8 +173,9 @@ void Peer::on_req(const docdb::Structured &msg) {
     }
 
 
+    IApp::FTRList ftlist;
     auto &storage = _app->get_storage();
-    bool fnd = _app->find_in_index(_rscalc, flts);
+    bool fnd = _app->find_in_index(_rscalc, flts, std::move(ftlist));
 
     auto filter_docs = [&](auto fn) {
         _rscalc.documents(storage, [&](docdb::DocID id, const auto &doc){
@@ -194,7 +195,21 @@ void Peer::on_req(const docdb::Structured &msg) {
 
 
     if (fnd) {
-        if (limit > 0 && _rscalc.top().size()>limit) {
+        if (!ftlist.empty()) {
+            auto top = _rscalc.pop();
+            std::sort(top.begin(), top.end(), [&](docdb::DocID a, docdb::DocID b){
+               auto it1 = std::lower_bound(ftlist.begin(),ftlist.end(), IApp::FulltextRelevance{a,0});
+               auto it2 = std::lower_bound(ftlist.begin(),ftlist.end(), IApp::FulltextRelevance{b,0});
+               return it1->second < it2->second;
+            });
+            if (limit && limit < top.size()) {
+                top.resize(limit);
+            }
+            _rscalc.push(std::move(top));
+            filter_docs([&](const auto &doc){
+                send({commands[Command::EVENT], subid, &doc});
+            });
+        }else if (limit > 0 && _rscalc.top().size()>limit) {
             std::vector<Event> events;
             filter_docs([&](auto &doc){
                 events.push_back(std::move(doc));
@@ -231,7 +246,7 @@ void Peer::on_count(const docdb::Structured &msg) {
        auto filter = IApp::Filter::create(rq[pos]);
        flts.push_back(filter);
     }
-    bool fnd = _app->find_in_index(_rscalc, flts);
+    bool fnd = _app->find_in_index(_rscalc, flts, {});
     std::intmax_t count = 0;
     if (fnd) {
         count = _rscalc.top().size();
@@ -261,7 +276,7 @@ void Peer::event_deletion(Event &&event) {
     auto &storage = _app->get_storage();
     docdb::Batch b;
     if (!flt.ids.empty()) {
-        bool ok= _app->find_in_index(_rscalc, {flt});
+        bool ok= _app->find_in_index(_rscalc, {flt}, {});
         if (ok) {
             _rscalc.documents(_app->get_storage(), [&](docdb::DocID id, const auto &r){
                if (r)  {
