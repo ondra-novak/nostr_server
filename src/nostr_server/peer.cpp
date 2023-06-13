@@ -120,6 +120,12 @@ void Peer::on_event(docdb::Structured &msg) {
     try {
         auto &storage = _app->get_storage();
         docdb::Structured event(std::move(msg.at(1)));
+        if (!_secp.has_value()) {
+            _secp.emplace();
+        }
+        if (!_secp->verify(event)) {
+            throw std::runtime_error("Signature verification failed");
+        }
         auto kind = event["kind"].as<unsigned int>();
         if (kind >= 20000 && kind < 30000) { //empheral event  - do not store
             _app->get_publisher().publish(std::move(event));

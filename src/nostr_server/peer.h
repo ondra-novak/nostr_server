@@ -7,6 +7,7 @@
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
 
+#include "signature.h"
 #include <array>
 
 namespace nostr_server {
@@ -28,6 +29,7 @@ protected:
     coroserver::ws::Stream _stream;
     docdb::RecordSetCalculator _rscalc;
     mutable std::mutex _mx;
+    std::optional<Secp256Context> _secp;
 
 
     Subscriptions _subscriptions;

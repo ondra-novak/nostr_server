@@ -4,6 +4,7 @@ add_executable(nostr_server
 	main.cpp
 	app.cpp
 	peer.cpp
+	signature.cpp
 )
 
 target_link_libraries(nostr_server
