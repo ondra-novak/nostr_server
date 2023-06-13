@@ -107,7 +107,7 @@ void Peer::processMessage(std::string_view msg_text) {
 }
 
 void Peer::send(const docdb::Structured &msgdata) {
-    std::string json = msgdata.to_json();
+    std::string json = msgdata.to_json(docdb::Structured::flagUTF8);
     _req.log_message([&](auto emit){
         std::string msg = "Send: ";
         msg.append(json);
@@ -124,7 +124,7 @@ void Peer::on_event(docdb::Structured &msg) {
             _secp.emplace();
         }
         if (!_secp->verify(event)) {
-            throw std::runtime_error("Signature verification failed");
+            throw std::invalid_argument("Signature verification failed");
         }
         auto kind = event["kind"].as<unsigned int>();
         if (kind >= 20000 && kind < 30000) { //empheral event  - do not store
@@ -141,8 +141,14 @@ void Peer::on_event(docdb::Structured &msg) {
         }
         _app->get_publisher().publish(std::move(event));
         send({commands[Command::OK], true});
+    } catch (const std::invalid_argument &e) {
+        send({commands[Command::OK], false, std::string("invalid:") + e.what()});
+    } catch (const docdb::DuplicateKeyException &e) {
+        send({commands[Command::OK], false, "blocked: Already exists"});
+    } catch (const std::bad_cast &e) {
+        send({commands[Command::OK], false, "invalid: Malformed event"});
     } catch (const std::exception &e) {
-        send({commands[Command::OK], false, e.what()});
+        send({commands[Command::OK], false, std::string("error:") + e.what()});
     }
 
 }
@@ -262,7 +268,7 @@ void Peer::event_deletion(Event &&event) {
                    const Event &ev = r->content;
                    std::string p = ev["pubkey"].as<std::string>();
                   if (p != pubkey) {
-                      throw std::runtime_error("pubkey missmatch");
+                      throw std::invalid_argument("pubkey missmatch");
                   }
                   storage.erase(b, id);
                   deleted_something = true;

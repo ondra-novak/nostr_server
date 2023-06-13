@@ -21,6 +21,10 @@ namespace nostr_server {
 class App: public std::enable_shared_from_this<App>, public IApp {
 public:
 
+    static const Event supported_nips;
+    static const std::string software_url;
+    static const std::string software_version;
+
 
     App(const Config &cfg);
 
@@ -68,6 +72,7 @@ protected:
 
     EventPublisher event_publish;
     docdb::PDatabase _db;
+    ServerDescription _server_desc;
 
 
     Storage _storage;
@@ -77,6 +82,7 @@ protected:
     IndexTagValueHashTime _index_tag_value_time;
     IndexKindTime _index_kind_time;
 
+    cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
 
 
 };

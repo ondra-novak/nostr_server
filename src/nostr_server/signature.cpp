@@ -55,7 +55,7 @@ bool Secp256Context::verify(const Event &event) const {
             &event["content"]
     };
 
-    std::string eventData = eventToSign.to_json();
+    std::string eventData = eventToSign.to_json(docdb::Structured::flagUTF8);
 
     // Calculate sha256 hash of serialized event data
     unsigned char hash[SHA256_DIGEST_LENGTH];

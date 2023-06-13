@@ -7,16 +7,23 @@
 
 #include "app.h"
 #include "peer.h"
-
+#include "nostr_server_version.h"
 #include <coroserver/http_ws_server.h>
+#include <docdb/json.h>
 
-
-#include <bitset>
 namespace nostr_server {
+
+const Event App::supported_nips = {1};
+const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
+const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
+
+
+
 
 App::App(const Config &cfg)
         :static_page(cfg.web_document_root, "index.html")
         ,_db(docdb::Database::create(cfg.database_path, cfg.leveldb_options))
+        ,_server_desc(cfg.description)
         ,_storage(_db,"events")
         ,_index_by_id(_storage,"ids")
         ,_index_pubkey_time(_storage,"pubkey_hash_time")
@@ -35,6 +42,10 @@ void App::init_handlers(coroserver::http::Server &server) {
         if (vpath.empty() && req[coroserver::http::strtable::hdr_upgrade] == coroserver::http::strtable::val_websocket) {
             return Peer::client_main(req, me);
         } else {
+            auto ctx = req[coroserver::http::strtable::hdr_accept];
+            if (ctx == "application/nostr+json") {
+                return me->send_infodoc(req);
+            }
             return me->static_page(req, vpath);
         }
     });
@@ -419,6 +430,23 @@ bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filt
     }
     return b;
 
+}
+
+
+
+cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
+    Event doc {
+        {"name", _server_desc.name},
+        {"description", _server_desc.desc},
+        {"contact", _server_desc.contact},
+        {"pubkey", _server_desc.pubkey},
+        {"supported_nips", &supported_nips},
+        {"software", software_url},
+        {"version", software_version},
+    };
+    req.add_header(coroserver::http::strtable::hdr_content_type, "application/nostr+json");
+    std::string json = doc.to_json();
+    return req.send(std::move(json));
 }
 
 } /* namespace nostr_server */

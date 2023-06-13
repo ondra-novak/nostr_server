@@ -67,6 +67,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     auto main = cfg["server"];
     auto db = cfg["database"];
     auto ssl = cfg["ssl"];
+    auto desc = cfg["description"];
 
 
     nostr_server::Config outcfg;
@@ -90,6 +91,10 @@ nostr_server::Config init_cfg(int argc, char **argv) {
         outcfg.ssl_listen_addr.append(ssl_listen_addr);
     }
 
+    outcfg.description.name = desc["name"].getString();
+    outcfg.description.desc = desc["description"].getString();
+    outcfg.description.contact = desc["contact"].getString();
+    outcfg.description.pubkey = desc["pubkey"].getString();
 
     return outcfg;
 }

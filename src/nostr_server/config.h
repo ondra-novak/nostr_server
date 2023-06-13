@@ -8,6 +8,12 @@
 
 namespace nostr_server {
 
+struct ServerDescription {
+    std::string name;
+    std::string desc;
+    std::string pubkey;
+    std::string contact;
+};
 
 struct Config {
 
@@ -20,6 +26,9 @@ struct Config {
     std::string ssl_listen_addr;
 
     leveldb::Options leveldb_options;
+
+    ServerDescription description;
+
 
 };
 
