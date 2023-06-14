@@ -41,7 +41,7 @@ protected:
 
     void processMessage(std::string_view msg_text);
 
-    void send(const docdb::Structured &msgdata);
+    cocls::suspend_point<bool> send(const docdb::Structured &msgdata);
 
     std::string _log_buffer;
 

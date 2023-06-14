@@ -129,7 +129,10 @@ int IApp::Filter::tag2bit(char tag) {
 bool IApp::Filter::test(const docdb::Structured &doc) const {
 try {
     if (!authors.empty()) {
-        if (std::find(authors.begin(), authors.end(), doc["pubkey"].as<std::string_view>()) == authors.end()) {
+        auto t = doc["pubkey"].as<std::string_view>();
+        if (std::find_if(authors.begin(), authors.end(), [&](const std::string_view &a){
+            return t.compare(0, a.size(), a) == 0;
+        }) == authors.end()) {
             return false;
         }
     }
@@ -348,7 +351,7 @@ bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filt
         if (!f.ids.empty()) {
            auto s = calc.get_empty_set();
            for (const auto &a: f.ids) {
-               auto row = _index_by_id.find(a);
+               auto row = _index_by_id.find(docdb::prefix(a));
                if (row) s.push_back(row->id);
            }
            calc.push(std::move(s));
@@ -423,10 +426,15 @@ cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
 
 template<typename Emit>
 inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) const {
-    std::vector<WordToken> tokens;
-    tokenize_text(ev["content"].as<std::string_view>(), tokens);
-    for (const auto &x: tokens) {
-        emit(x.first, x.second);
+    unsigned int kind = ev["kind"].as<unsigned int>();
+    if (kind == 0 || kind == 1 || kind == 2 || kind == 30023) {
+        std::vector<WordToken> tokens;
+        tokenize_text(ev["content"].as<std::string_view>(), tokens);
+        for (const auto &x: tokens) {
+            if (x.first.size()>1) {
+                emit(x.first, x.second);
+            }
+        }
     }
 }
 

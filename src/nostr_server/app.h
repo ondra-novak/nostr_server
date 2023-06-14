@@ -61,7 +61,7 @@ protected:
     };
 
     struct IndexForFulltextFn{
-        static constexpr int revision = 2;
+        static constexpr int revision = 3;
         template<typename Emit> void operator()(Emit emit, const Event &ev) const;
     };
 

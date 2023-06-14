@@ -106,21 +106,23 @@ void Peer::processMessage(std::string_view msg_text) {
 
 }
 
-void Peer::send(const docdb::Structured &msgdata) {
+cocls::suspend_point<bool> Peer::send(const docdb::Structured &msgdata) {
     std::string json = msgdata.to_json(docdb::Structured::flagUTF8);
     _req.log_message([&](auto emit){
         std::string msg = "Send: ";
         msg.append(json);
         emit(msg);
     }, 0);
-    _stream.write({json});
+    return _stream.write({json});
 }
 
 
 void Peer::on_event(docdb::Structured &msg) {
+    std::string id;
     try {
         auto &storage = _app->get_storage();
         docdb::Structured event(std::move(msg.at(1)));
+        id = event["id"].as<std::string>();
         if (!_secp.has_value()) {
             _secp.emplace();
         }
@@ -141,15 +143,15 @@ void Peer::on_event(docdb::Structured &msg) {
             storage.put(event, to_replace);
         }
         _app->get_publisher().publish(std::move(event));
-        send({commands[Command::OK], true});
+        send({commands[Command::OK], id, true, ""});
     } catch (const std::invalid_argument &e) {
-        send({commands[Command::OK], false, std::string("invalid:") + e.what()});
+        send({commands[Command::OK], id, false, std::string("invalid:") + e.what()});
     } catch (const docdb::DuplicateKeyException &e) {
-        send({commands[Command::OK], false, "blocked: Already exists"});
+        send({commands[Command::OK], id, true, "duplicate:"});
     } catch (const std::bad_cast &e) {
-        send({commands[Command::OK], false, "invalid: Malformed event"});
+        send({commands[Command::OK], id, false, "invalid: Malformed event"});
     } catch (const std::exception &e) {
-        send({commands[Command::OK], false, std::string("error:") + e.what()});
+        send({commands[Command::OK], id, false, std::string("error:") + e.what()});
     }
 
 }
@@ -208,7 +210,7 @@ void Peer::on_req(const docdb::Structured &msg) {
             }
             _rscalc.push(std::move(top));
             filter_docs([&](const auto &doc){
-                send({commands[Command::EVENT], subid, &doc});
+                if (!send({commands[Command::EVENT], subid, &doc})) return;
             });
         }else if (limit > 0 && _rscalc.top().size()>limit) {
             std::vector<Event> events;
@@ -223,12 +225,12 @@ void Peer::on_req(const docdb::Structured &msg) {
                 std::advance(iter, events.size()-limit);
             }
             while (iter != events.end()) {
-                send({commands[Command::EVENT], subid, &(*iter)});
+                if (!send({commands[Command::EVENT], subid, &(*iter)})) return;
                 ++iter;
             }
         } else {
             filter_docs([&](const auto &doc){
-                send({commands[Command::EVENT], subid, &doc});
+                if (!send({commands[Command::EVENT], subid, &doc})) return;
             });
         }
     }
