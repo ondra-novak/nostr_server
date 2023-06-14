@@ -65,7 +65,6 @@ void App::IndexByIdFn::operator ()(Emit emit, const Event &ev) const {
 template<typename Emit>
 void App::IndexByAuthorKindFn::operator()(Emit emit, const Event &ev) const {
     auto kind = ev["kind"].as<unsigned int>();
-    std::string_view pubkey;
     std::string tag;
     bool replacable_1 = (kind == 0) | (kind == 3) | ((kind >= 10000) & (kind < 20000));
     bool replacable_2 = (kind >= 30000) & (kind < 40000);

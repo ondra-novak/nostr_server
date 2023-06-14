@@ -34,8 +34,8 @@ public:
     virtual EventPublisher &get_publisher() override {return event_publish;}
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
-    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const ;
-    virtual docdb::PDatabase get_database() const {return _db;}
+    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const override ;
+    virtual docdb::PDatabase get_database() const override {return _db;}
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -65,7 +65,6 @@ protected:
         template<typename Emit> void operator()(Emit emit, const Event &ev) const;
     };
 
-    struct IndexByAuthorKindFn;
 
     using IndexById = docdb::Indexer<Storage,IndexByIdFn,docdb::IndexType::unique>;
     using IndexByAuthorKind = docdb::Indexer<Storage,IndexByAuthorKindFn,docdb::IndexType::unique, TimestampRowDef>;

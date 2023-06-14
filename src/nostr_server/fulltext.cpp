@@ -1,5 +1,7 @@
 #include "fulltext.h"
 #include <docdb/utf8.h>
+
+#include <algorithm>
 #include <iostream>
 #include <vector>
 #include <unac.h>

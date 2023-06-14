@@ -27,7 +27,3 @@ include(src/docdb/library.cmake)
 include(src/shared/library.cmake)
 add_subdirectory("src/nostr_server")
 add_subdirectory("version")
-
-
-
-
