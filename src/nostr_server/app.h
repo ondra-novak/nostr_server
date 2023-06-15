@@ -36,6 +36,7 @@ public:
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
     virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const override ;
     virtual docdb::PDatabase get_database() const override {return _db;}
+    virtual Event get_server_capabilities() const override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -79,6 +80,7 @@ protected:
     EventPublisher event_publish;
     docdb::PDatabase _db;
     ServerDescription _server_desc;
+    ServerOptions _server_options;
 
 
     Storage _storage;

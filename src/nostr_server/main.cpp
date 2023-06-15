@@ -68,7 +68,8 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     auto db = cfg["database"];
     auto ssl = cfg["ssl"];
     auto desc = cfg["description"];
-
+    auto options = cfg["options"];
+    auto replication = cfg["replication"];
 
     nostr_server::Config outcfg;
     outcfg.listen_addr = main["listen"].getString("localhost:10000");
@@ -95,6 +96,27 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.description.desc = desc["description"].getString();
     outcfg.description.contact = desc["contact"].getString();
     outcfg.description.pubkey = desc["pubkey"].getString();
+
+    outcfg.options.pow = options["pow"].getUInt(0);
+    outcfg.options.event_rate_limit = options["event_rate_limit"].getUInt(6);
+    outcfg.options.event_rate_window = options["event_rate_window"].getUInt(60);
+    outcfg.options.auth = options["auth"].getBool(true);
+    outcfg.options.block_strangers = options["block_strangers"].getBool(false);
+    outcfg.options.foreign_relaying = options["foreign_relaying"].getBool(false);
+    outcfg.options.replicators = options["replicators"].getString();
+
+    outcfg.private_key = replication["private_key"].getString("replicator_01");
+    for (const auto &item: replication) {
+        std::string_view n = item.first.getView();
+        if (n.compare(0,5,"task_") == 0) {
+            outcfg.replication_config.emplace_back(
+                    std::string(n.substr(5)),
+                    std::string(item.second.getString()));
+        }
+    }
+
+
+
 
     return outcfg;
 }

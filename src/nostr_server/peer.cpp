@@ -1,4 +1,5 @@
 #include <coroserver/http_ws_server.h>
+#include <coroserver/http_stringtables.h>
 #include <coroserver/static_lookup.h>
 #include <docdb/json.h>
 
@@ -7,22 +8,42 @@
 #include <sstream>
 namespace nostr_server {
 
-Peer::Peer(coroserver::http::ServerRequest &req, PApp app)
+Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options)
 :_req(req)
 ,_app(std::move(app))
+,_options(std::move(options))
 ,_subscriber(_app->get_publisher())
+,_rate_limiter(options.event_rate_window, options.event_rate_limit)
 {
 }
 
+NAMED_ENUM(Command,
+        unknown,
+        REQ,
+        EVENT,
+        CLOSE,
+        COUNT,
+        EOSE,
+        NOTICE,
+        AUTH,
+        OK,
+        HELLO,
+        WELCOME
+);
+constexpr NamedEnum_Command commands={};
+
+
 using namespace coroserver::ws;
 
-cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp app) {
+cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options) {
     std::exception_ptr e;
-    Peer me(req, app);
+    Peer me(req, app, options);
     bool res =co_await Server::accept(me._stream, me._req);
     if (!res) co_return true;
 
-    me._req.log_message("Connected client");
+    auto ua = req[coroserver::http::strtable::hdr_user_agent];
+    me._req.log_message("Connected client: "+std::string(ua));
+
 
     auto listener = me.listen_publisher();
     try {
@@ -57,18 +78,6 @@ void Peer::filter_event(const docdb::Structured &doc, Fn fn) const  {
     }
 }
 
-NAMED_ENUM(Command,
-        unknown,
-        REQ,
-        EVENT,
-        CLOSE,
-        COUNT,
-        EOSE,
-        NOTICE,
-        OK
-);
-constexpr NamedEnum_Command commands={};
-
 
 cocls::future<void> Peer::listen_publisher() {
     bool nx = co_await _subscriber.next();
@@ -95,15 +104,31 @@ void Peer::processMessage(std::string_view msg_text) {
 
     Command cmd = commands[cmd_text];
     switch (cmd) {
-        case Command::EVENT: on_event(msg); break;
-        case Command::REQ: on_req(msg);break;
-        case Command::COUNT: on_count(msg);break;
-        case Command::CLOSE: on_close(msg);break;
+        case Command::EVENT:
+            if (!check_for_auth()) return;
+            on_event(msg); break;
+        case Command::REQ:
+            if (!check_for_auth()) return;
+            on_req(msg);break;
+        case Command::COUNT:
+            if (!check_for_auth()) return;
+            on_count(msg);break;
+        case Command::CLOSE:
+            if (!check_for_auth()) return;
+            on_close(msg);break;
+        case Command::HELLO:
+            _hello_recv = true;
+            _client_capabilities = msg[1];
+            if (!check_for_auth()) return;
+            send_welcome();
+            break;
+        case Command::AUTH:
+            process_auth(msg[1]);
+            break;
         default: {
             send({commands[Command::NOTICE], std::string("Unknown command: ").append(cmd_text)});
         }
     }
-
 }
 
 cocls::suspend_point<bool> Peer::send(const docdb::Structured &msgdata) {
@@ -122,7 +147,18 @@ void Peer::on_event(docdb::Structured &msg) {
     try {
         auto &storage = _app->get_storage();
         docdb::Structured event(std::move(msg.at(1)));
-        id = event["id"].as<std::string>();
+        id = event["id"].as<std::string_view>();
+        auto now = std::chrono::system_clock::now();
+        if (!_rate_limiter.test_and_add(now)) {
+            send({commands[Command::OK],id,false,
+                "rate-limited: you can only post "+std::to_string(_options.event_rate_limit)
+                +" events every " + std::to_string(_options.event_rate_window) + " seconds"});
+            return;
+        }
+        if (_options.pow>0 && !check_pow(id)){
+            send({commands[Command::OK],id,false,"pow: required difficulty " + std::to_string(_options.pow)});
+            return;
+        }
         if (!_secp.has_value()) {
             _secp.emplace();
         }
@@ -269,6 +305,7 @@ void Peer::on_close(const docdb::Structured &msg) {
 
 void Peer::event_deletion(Event &&event) {
     bool deleted_something = false;
+    auto id = event["id"].as<std::string_view>();
     auto pubkey = event["pubkey"].as<std::string_view>();
     IApp::Filter flt;
     for (const auto &item: event["tags"].array()) {
@@ -300,7 +337,98 @@ void Peer::event_deletion(Event &&event) {
         storage.get_db()->commit_batch(b);
         _app->get_publisher().publish(std::move(event));
     }
-    send({commands[Command::OK], true});
+    send({commands[Command::OK], id, true, ""});
+}
+
+bool Peer::check_pow(std::string_view id) const {
+    int bits = 0;
+    static constexpr int nibble_sizes[16] = {4,3,2,2,1,1,1,1,0,0,0,0,0,0,0,0};
+    for (char c: id) {
+        int nibble;
+        if (c >= '0' && c<='9') nibble = c - '0';
+        else if (c >= 'A' && c<='F') nibble = c - 'A'+10;
+        else if (c >= 'a' && c<='f') nibble = c - 'a'+10;
+        else return false;
+        if (nibble != 0) {
+            bits += nibble_sizes[nibble];
+            return (bits >= _options.pow);
+        } else {
+            bits+=4;
+        }
+    }
+    return true;
+}
+
+void Peer::prepare_auth_challenge() {
+    _auth_pubkey.clear();
+    std::random_device rdev;
+    std::default_random_engine rnd(rdev());
+    std::uniform_int_distribution<int> rnum(33,126);
+    for (int i = 0; i<15; i++) {
+        _auth_pubkey.push_back(rnum(rnd));
+    }
+}
+
+void Peer::process_auth(const Event &event) {
+    auto id = event["id"].as<std::string_view>();
+    try {
+        auto now = std::chrono::system_clock::now();
+        if (!_secp.has_value()) {
+            _secp.emplace();
+        }
+        if (!_secp->verify(event)) {
+            throw std::invalid_argument("Signature verification failed");
+        }
+        auto kind = event["kind"].as<unsigned int>();
+        if (kind != 22242) {
+            throw std::invalid_argument("Unsupported kind");
+        }
+        auto created_at = std::chrono::system_clock::from_time_t(event["created_at"].as<std::time_t>());
+        if (std::chrono::duration_cast<std::chrono::minutes>(now - created_at).count() > 10) {
+            throw std::invalid_argument("Challenge expired");
+        }
+        auto tags = event["tags"].array();
+        auto chiter = std::find_if(tags.begin(), tags.end(), [&](const Event &x) {
+           return x[0].as<std::string_view>() == "challenge";
+        });
+        if (chiter == tags.end() || (*chiter)[1].as<std::string_view>() != _auth_pubkey) {
+            throw std::invalid_argument("Invalid challenge");
+        }
+        _authent = true;
+        _auth_pubkey = event["pubkey"].as<std::string>();
+        if (_hello_recv) {
+            send_welcome();
+        } else {
+            send({commands[Command::OK], id, true, "Welcome on relay!"});
+        }
+    } catch (const std::exception &e) {
+        send({commands[Command::OK], id, false, std::string("restricted:") + e.what()});
+        if (_hello_recv) {
+            _stream.close();
+        }
+    }
+
+}
+
+bool Peer::check_for_auth() {
+    if (!_options.auth) return true;
+    if (!_authent) {
+        if (!_auth_sent) {
+            prepare_auth_challenge();
+            send({commands[Command::AUTH],_auth_pubkey});
+            _auth_sent = true;
+            return false;
+        } else {
+            send({commands[Command::NOTICE],
+                    "restricted: Authentication is mandatory on this relay"});
+            return false;
+        }
+    }
+    return true;
+}
+
+void Peer::send_welcome() {
+    send({commands[Command::WELCOME], _app->get_server_capabilities()});
 }
 
 }

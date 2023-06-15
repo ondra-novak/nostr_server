@@ -2,6 +2,7 @@
 #ifndef SRC_NOSTR_SERVER_REPLICATION_H_
 #define SRC_NOSTR_SERVER_REPLICATION_H_
 
+#include "config.h"
 #include "iapp.h"
 
 #include <docdb/database.h>
@@ -11,14 +12,6 @@
 #include <coroserver/websocket_stream.h>
 
 namespace nostr_server {
-
-struct ReplicationTask {
-    std::string task_name;
-    std::string relay_url;
-};
-
-
-using ReplicationConfig = std::vector<ReplicationTask>;
 
 class ReplicationService {
 public:

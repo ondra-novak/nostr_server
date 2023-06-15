@@ -16,7 +16,7 @@
 #include "fulltext.h"
 namespace nostr_server {
 
-const Event App::supported_nips = {1,9,11,12,16,20,33,45,50};
+const Event App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
 //to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
@@ -28,6 +28,7 @@ App::App(const Config &cfg)
         :static_page(cfg.web_document_root, "index.html")
         ,_db(docdb::Database::create(cfg.database_path, cfg.leveldb_options))
         ,_server_desc(cfg.description)
+        ,_server_options(cfg.options)
         ,_storage(_db,"events")
         ,_index_by_id(_storage,"ids")
         ,_index_pubkey_time(_storage,"pubkey_hash_time")
@@ -45,7 +46,7 @@ void App::init_handlers(coroserver::http::Server &server) {
     server.set_handler("/", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<bool> {
         req.add_header(coroserver::http::strtable::hdr_access_control_allow_origin, "*");
         if (vpath.empty() && req[coroserver::http::strtable::hdr_upgrade] == coroserver::http::strtable::val_websocket) {
-            return Peer::client_main(req, me);
+            return Peer::client_main(req, me, me->_server_options);
         } else {
 /*            auto ctx = req[coroserver::http::strtable::hdr_accept];
          if (ctx == "application/nostr+json") {*/
@@ -407,15 +408,7 @@ bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filt
 
 
 cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
-    Event doc {
-        {"name", _server_desc.name},
-        {"description", _server_desc.desc},
-        {"contact", _server_desc.contact},
-        {"pubkey", _server_desc.pubkey},
-        {"supported_nips", &supported_nips},
-        {"software", software_url},
-        {"version", software_version},
-    };
+    Event doc = App::get_server_capabilities();
     req.add_header(coroserver::http::strtable::hdr_content_type, "application/nostr+json");
     std::string json = doc.to_json();
     return req.send(std::move(json));
@@ -437,5 +430,25 @@ inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) con
     }
 }
 
+Event App::get_server_capabilities() const {
+    Event limitation = Event::KeyPairs();
+    if (_server_options.pow) {
+        limitation.set("min_pow_difficulty", _server_options.pow);
+    }
+    if (_server_options.auth) {
+        limitation.set("auth_required", true);
+    }
+    Event doc {
+        {"name", _server_desc.name},
+        {"description", _server_desc.desc},
+        {"contact", _server_desc.contact},
+        {"pubkey", _server_desc.pubkey},
+        {"supported_nips", &supported_nips},
+        {"software", software_url},
+        {"version", software_version},
+        {"limitation", limitation}
+    };
+    return doc;
+}
 
 } /* namespace nostr_server */

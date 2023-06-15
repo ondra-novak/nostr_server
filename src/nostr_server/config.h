@@ -15,6 +15,25 @@ struct ServerDescription {
     std::string contact;
 };
 
+struct ServerOptions {
+    int pow = 0; //specifies count of bits for Proof of work (0 - disabled)
+    int event_rate_window = 10;
+    int event_rate_limit = 10;
+    bool auth;
+    bool block_strangers;
+    bool foreign_relaying;
+    std::string replicators;
+};
+
+
+struct ReplicationTask {
+    std::string task_name;
+    std::string relay_url;
+};
+
+
+using ReplicationConfig = std::vector<ReplicationTask>;
+
 struct Config {
 
     std::string listen_addr;
@@ -29,6 +48,10 @@ struct Config {
 
     ServerDescription description;
 
+    ServerOptions options;
+
+    std::string private_key;
+    ReplicationConfig replication_config;
 
 };
 

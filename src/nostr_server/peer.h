@@ -3,11 +3,14 @@
 #define SRC_NOSTR_SERVER_PEER_H_
 
 #include "iapp.h"
+#include "signature.h"
+#include "config.h"
+#include "rate_limiter.h"
+
 
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
 
-#include "signature.h"
 #include <array>
 
 namespace nostr_server {
@@ -16,22 +19,29 @@ namespace nostr_server {
 class Peer {
 public:
 
-    static cocls::future<bool> client_main(coroserver::http::ServerRequest &req, PApp app);
+    static cocls::future<bool> client_main(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &options);
 
     using Subscriptions = std::vector<std::pair<std::string,std::vector<IApp::Filter> > >;
 
 
 
 protected:
-    Peer(coroserver::http::ServerRequest &req, PApp app);
+    Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options);
 
     coroserver::http::ServerRequest &_req;
     PApp _app;
+    const ServerOptions & _options;
     EventSubscriber _subscriber;
     coroserver::ws::Stream _stream;
     docdb::RecordSetCalculator _rscalc;
     mutable std::mutex _mx;
     std::optional<Secp256Context> _secp;
+    RateLimiter _rate_limiter;
+    bool _authent = false;
+    bool _hello_recv = false;
+    bool _auth_sent = false;
+    std::string _auth_pubkey;
+    Event _client_capabilities;
 
 
     Subscriptions _subscriptions;
@@ -56,7 +66,11 @@ protected:
     template<typename Fn>
     void filter_event(const docdb::Structured &doc, Fn fn) const;
 
-
+    bool check_pow(std::string_view id) const;
+    void prepare_auth_challenge();
+    void process_auth(const Event &msg);
+    bool check_for_auth();
+    void send_welcome();
 
 };
 

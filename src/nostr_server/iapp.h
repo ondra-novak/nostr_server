@@ -65,6 +65,7 @@ public:
     virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, FTRList &&relevance) const = 0;
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
+    virtual Event get_server_capabilities() const = 0;
 
 };
 

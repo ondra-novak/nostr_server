@@ -27,24 +27,7 @@ void hexToBytes(const std::string_view& hexString, Fn &&fn) {
         fn(byte);
     }
 }
-#if 0
-bool verifySig(secp256k1_context* ctx, std::string_view sig, std::string_view hash, std::string_view pubkey) {
-    if (sig.size() != 64 || hash.size() != 32 || pubkey.size() != 32) throw herr("verify sig: bad input size");
 
-    secp256k1_xonly_pubkey pubkeyParsed;
-    if (!secp256k1_xonly_pubkey_parse(ctx, &pubkeyParsed, (const uint8_t*)pubkey.data())) throw herr("verify sig: bad pubkey");
-
-    return secp256k1_schnorrsig_verify(
-                ctx,
-                (const uint8_t*)sig.data(),
-                (const uint8_t*)hash.data(),
-#ifdef SECP256K1_SCHNORRSIG_EXTRAPARAMS_INIT // old versions of libsecp256k1 didn't take a msg size param, this define added just after
-                hash.size(),
-#endif
-                &pubkeyParsed
-    );
-}
-#endif
 
 bool Secp256Context::verify(const Event &event) const {
     Event eventToSign = {0,
