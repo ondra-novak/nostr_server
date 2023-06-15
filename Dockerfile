@@ -32,10 +32,10 @@ RUN apt install -y \
 WORKDIR /app
 
 COPY --from=builder /src/build/release/bin /app/bin
+COPY --from=builder /src/conf /app/conf
 COPY --from=builder /src/www /app/www
 
 EXPOSE 10000
 VOLUME /app/data
-VOLUME /app/conf
 
 CMD /app/bin/nostr_server
