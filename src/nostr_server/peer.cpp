@@ -51,6 +51,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
             Message msg = co_await me._stream.read();
             if (msg.type == Type::text) me.processMessage(msg.payload);
             else if (msg.type == Type::connClose) break;
+            co_await me._stream.wait_for_flush();
         }
     } catch (...) {
         e = std::current_exception();
@@ -141,6 +142,11 @@ cocls::suspend_point<bool> Peer::send(const docdb::Structured &msgdata) {
     return _stream.write({json});
 }
 
+class Blocked: public std::runtime_error {
+public:
+    using std::runtime_error::runtime_error;
+};
+
 
 void Peer::on_event(docdb::Structured &msg) {
     std::string id;
@@ -148,14 +154,18 @@ void Peer::on_event(docdb::Structured &msg) {
         auto &storage = _app->get_storage();
         docdb::Structured event(std::move(msg.at(1)));
         id = event["id"].as<std::string_view>();
+        std::string_view pubkey = event["pubkey"].as<std::string_view>();
+        if (!_no_limit && _options.read_only && _options.replicators.find(pubkey) == _options.replicators.npos) {
+            throw Blocked("Sorry, server is in read_only mode");
+        }
         auto now = std::chrono::system_clock::now();
-        if (!_rate_limiter.test_and_add(now)) {
+        if (!_no_limit && !_rate_limiter.test_and_add(now)) {
             send({commands[Command::OK],id,false,
                 "rate-limited: you can only post "+std::to_string(_options.event_rate_limit)
                 +" events every " + std::to_string(_options.event_rate_window) + " seconds"});
             return;
         }
-        if (_options.pow>0 && !check_pow(id)){
+        if (!_no_limit && _options.pow>0 && !check_pow(id)){
             send({commands[Command::OK],id,false,"pow: required difficulty " + std::to_string(_options.pow)});
             return;
         }
@@ -174,16 +184,41 @@ void Peer::on_event(docdb::Structured &msg) {
             event_deletion(std::move(event));
             return;
         }
+        if (!_no_limit && !_options.foreign_relaying && _options.auth) {
+            if (pubkey != _auth_pubkey) {
+                throw Blocked("Relaying foreign events is not allowed here");
+            }
+        }
+        if (!_no_limit && _options.block_strangers) {
+            bool unblock = _app->is_home_user(pubkey);
+            if (!unblock) {
+                const Event::Array &tags = event["tags"].array();
+                for (const auto &t : tags) {
+                    std::string_view tname = t[0].as<std::string_view>();
+                    if (tname == "p") {
+                        unblock = _app->is_home_user(t[1].as<std::string_view>());
+                    } else if (tname == "delegation") {
+                        unblock = _app->is_home_user(t[1].as<std::string_view>());
+                    }
+                    if (unblock) break;
+                }
+                if (!unblock) {
+                    throw Blocked("This place is not for strangers");
+                }
+            }
+        }
         auto to_replace = _app->doc_to_replace(event);
         if (to_replace != docdb::DocID(-1)) {
             storage.put(event, to_replace);
         }
         _app->get_publisher().publish(std::move(event));
         send({commands[Command::OK], id, true, ""});
-    } catch (const std::invalid_argument &e) {
-        send({commands[Command::OK], id, false, std::string("invalid:") + e.what()});
     } catch (const docdb::DuplicateKeyException &e) {
         send({commands[Command::OK], id, true, "duplicate:"});
+    } catch (const Blocked &e) {
+        send({commands[Command::OK], id, false, std::string("blocked: ") + e.what()});
+    } catch (const std::invalid_argument &e) {
+        send({commands[Command::OK], id, false, std::string("invalid: ") + e.what()});
     } catch (const std::bad_cast &e) {
         send({commands[Command::OK], id, false, "invalid: Malformed event"});
     } catch (const std::exception &e) {
@@ -396,6 +431,11 @@ void Peer::process_auth(const Event &event) {
         }
         _authent = true;
         _auth_pubkey = event["pubkey"].as<std::string>();
+
+        if (_options.replicators.find(_auth_pubkey) != _options.replicators.npos) {
+            _no_limit = true;
+        }
+
         if (_hello_recv) {
             send_welcome();
         } else {

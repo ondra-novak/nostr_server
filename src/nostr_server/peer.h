@@ -40,6 +40,7 @@ protected:
     bool _authent = false;
     bool _hello_recv = false;
     bool _auth_sent = false;
+    bool _no_limit = false;
     std::string _auth_pubkey;
     Event _client_capabilities;
 

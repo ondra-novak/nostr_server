@@ -22,6 +22,7 @@ struct ServerOptions {
     bool auth;
     bool block_strangers;
     bool foreign_relaying;
+    bool read_only;
     std::string replicators;
 };
 

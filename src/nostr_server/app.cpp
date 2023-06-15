@@ -451,4 +451,9 @@ Event App::get_server_capabilities() const {
     return doc;
 }
 
+bool App::is_home_user(std::string_view pubkey) const {
+    auto fnd = _index_replaceable.find({pubkey, static_cast<unsigned int>(0),std::string_view()});
+    return fnd;
+}
+
 } /* namespace nostr_server */

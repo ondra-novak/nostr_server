@@ -37,6 +37,7 @@ public:
     virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const override ;
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual Event get_server_capabilities() const override;
+    virtual bool is_home_user(std::string_view pubkey) const override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -76,7 +77,6 @@ protected:
 
 
 
-
     EventPublisher event_publish;
     docdb::PDatabase _db;
     ServerDescription _server_desc;
@@ -90,6 +90,7 @@ protected:
     IndexTagValueHashTime _index_tag_value_time;
     IndexKindTime _index_kind_time;
     IndexForFulltext _index_fulltext;
+
 
     cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
 

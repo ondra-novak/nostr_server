@@ -66,6 +66,7 @@ public:
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
     virtual Event get_server_capabilities() const = 0;
+    virtual bool is_home_user(std::string_view pubkey) const = 0;
 
 };
 
