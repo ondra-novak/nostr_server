@@ -360,7 +360,11 @@ void Peer::event_deletion(Event &&event) {
                   if (p != pubkey) {
                       throw std::invalid_argument("pubkey missmatch");
                   }
-                  storage.erase(b, id);
+                  if (deleted_something) {
+                      storage.erase(b, id);
+                  } else {
+                      storage.put(b, event, id);
+                  }
                   deleted_something = true;
                }
             });
@@ -368,7 +372,6 @@ void Peer::event_deletion(Event &&event) {
     }
 
     if (deleted_something) {
-        storage.put(b, event);
         storage.get_db()->commit_batch(b);
         _app->get_publisher().publish(std::move(event));
     }

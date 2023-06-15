@@ -351,8 +351,12 @@ bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filt
         if (!f.ids.empty()) {
            auto s = calc.get_empty_set();
            for (const auto &a: f.ids) {
-               auto row = _index_by_id.find(docdb::prefix(a));
-               if (row) s.push_back(row->id);
+               if (a.size() == 64) {
+                   auto row = _index_by_id.find(a);
+                   if (row) s.push_back(row->id);
+               } else {
+                   calc.push(_index_by_id.select(docdb::prefix(a)));
+               }
            }
            calc.push(std::move(s));
            calc.AND(r);
