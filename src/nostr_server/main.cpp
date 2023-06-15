@@ -110,9 +110,9 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     for (const auto &item: replication) {
         std::string_view n = item.first.getView();
         if (n.compare(0,5,"task_") == 0) {
-            outcfg.replication_config.emplace_back(
+            outcfg.replication_config.push_back(nostr_server::ReplicationTask{
                     std::string(n.substr(5)),
-                    std::string(item.second.getString()));
+                    std::string(item.second.getString())});
         }
     }
 
