@@ -67,6 +67,7 @@ public:
     virtual docdb::PDatabase get_database() const = 0;
     virtual Event get_server_capabilities() const = 0;
     virtual bool is_home_user(std::string_view pubkey) const = 0;
+    virtual void client_counter(int increment) = 0;
 
 };
 

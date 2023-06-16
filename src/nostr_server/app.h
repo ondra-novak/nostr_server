@@ -5,7 +5,8 @@
 #include "publisher.h"
 #include "config.h"
 #include "iapp.h"
-
+#include "telemetry_def.h"
+#include "../telemetry/open_metrics/Collector.h"
 
 
 #include <docdb/json.h>
@@ -38,6 +39,7 @@ public:
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual Event get_server_capabilities() const override;
     virtual bool is_home_user(std::string_view pubkey) const override;
+    virtual void client_counter(int increment) override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -81,7 +83,12 @@ protected:
     docdb::PDatabase _db;
     ServerDescription _server_desc;
     ServerOptions _server_options;
+    OpenMetricConf _open_metrics_conf;
+    std::shared_ptr<telemetry::open_metrics::Collector> _omcoll;
+    telemetry::SharedSensor<docdb::PDatabase> _dbsensor;
+    telemetry::SharedSensor<StorageSensor> _storage_sensor;
 
+    std::atomic<int> _clients = {};
 
     Storage _storage;
     IndexById _index_by_id;
@@ -92,7 +99,9 @@ protected:
     IndexForFulltext _index_fulltext;
 
 
+
     cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
+    cocls::future<bool> send_simple_stats(coroserver::http::ServerRequest &req);
 
     static void merge_ft(FTRList &out, FTRList &a, FTRList &tmp);
     static void dedup_ft(FTRList &x);

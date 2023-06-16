@@ -8,10 +8,12 @@
 namespace nostr_server {
 
 
+using EventType =docdb::StructuredDocument<docdb::Structured::use_string_view> ;
 using Event = docdb::Structured;
+using EventSource = std::pair<Event, const void *>;
 
-using EventPublisher = cocls::publisher<Event>;
-using EventSubscriber = cocls::subscriber<Event>;
+using EventPublisher = cocls::publisher<EventSource>;
+using EventSubscriber = cocls::subscriber<EventSource>;
 
 }
 

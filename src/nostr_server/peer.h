@@ -7,6 +7,7 @@
 #include "config.h"
 #include "rate_limiter.h"
 
+#include "telemetry_def.h"
 
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
@@ -26,7 +27,12 @@ public:
 
 
 protected:
-    Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options);
+    Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options,
+            std::string user_agent, std::string ident
+    );
+    ~Peer();
+
+
 
     coroserver::http::ServerRequest &_req;
     PApp _app;
@@ -54,7 +60,8 @@ protected:
 
     cocls::suspend_point<bool> send(const docdb::Structured &msgdata);
 
-    std::string _log_buffer;
+    telemetry::UniqueSensor<ClientSensor> _sensor;
+    telemetry::SharedSensor<SharedStats> _shared_sensor;
 
 
     void on_event(docdb::Structured &msg);
@@ -73,6 +80,8 @@ protected:
     bool check_for_auth();
     void send_welcome();
 
+    void send_error(std::string_view id, std::string_view text);
+    void send_notice(std::string_view text);
 };
 
 }

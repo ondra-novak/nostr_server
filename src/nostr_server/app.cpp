@@ -11,9 +11,7 @@
 #include "fulltext.h"
 #include <coroserver/http_ws_server.h>
 #include <docdb/json.h>
-
-
-#include "fulltext.h"
+#include <sstream>
 namespace nostr_server {
 
 const Event App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
@@ -29,6 +27,8 @@ App::App(const Config &cfg)
         ,_db(docdb::Database::create(cfg.database_path, cfg.leveldb_options))
         ,_server_desc(cfg.description)
         ,_server_options(cfg.options)
+        ,_open_metrics_conf(cfg.metric)
+        ,_omcoll(std::make_shared<telemetry::open_metrics::Collector>())
         ,_storage(_db,"events")
         ,_index_by_id(_storage,"ids")
         ,_index_pubkey_time(_storage,"pubkey_hash_time")
@@ -37,6 +37,12 @@ App::App(const Config &cfg)
         ,_index_kind_time(_storage, "kind_time")
         ,_index_fulltext(_storage, "fulltext")
 {
+    if (cfg.metric.enable) {
+        register_scavengers(*_omcoll);
+        _omcoll->make_active();
+        _dbsensor.enable(_db);
+        _storage_sensor.enable(StorageSensor{&_storage});
+    }
 
 }
 
@@ -48,12 +54,35 @@ void App::init_handlers(coroserver::http::Server &server) {
         if (vpath.empty() && req[coroserver::http::strtable::hdr_upgrade] == coroserver::http::strtable::val_websocket) {
             return Peer::client_main(req, me, me->_server_options);
         } else {
-/*            auto ctx = req[coroserver::http::strtable::hdr_accept];
-         if (ctx == "application/nostr+json") {*/
+         auto ctx = req[coroserver::http::strtable::hdr_accept];
+         if (ctx == "application/nostr+json") {
                 return me->send_infodoc(req);
-/*            }
-            return me->static_page(req, vpath);*/
+            }
+            return me->static_page(req, vpath);
         }
+    });
+    if (_open_metrics_conf.enable) {
+        server.set_handler("/metrics", coroserver::http::Method::GET, [&](coroserver::http::ServerRequest &req, std::string_view ) ->cocls::future<bool> {
+            if (!_open_metrics_conf.auth.empty()) {
+                std::string_view hdr = req[coroserver::http::strtable::hdr_authorization];
+                if (hdr.find(_open_metrics_conf.auth) == hdr.npos) {
+                    req.set_status(401);
+                    return cocls::future<bool>::set_value(true);
+                }
+            }
+            std::ostringstream s(std::ios::binary);
+            _omcoll->collect(s);
+            s << "# EOF" << "\n";
+            req.add_header(coroserver::http::strtable::hdr_content_type, "application/openmetrics-text; version=1.0.0; charset=utf-8");
+            return req.send(s);
+        });
+    }
+
+    server.set_handler("/info", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req){
+        return me->send_infodoc(req);
+    });
+    server.set_handler("/stats", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req){
+        return me->send_simple_stats(req);
     });
 }
 
@@ -298,6 +327,10 @@ void App::merge_ft(FTRList &out, FTRList &a, FTRList &tmp) {
 
 }
 
+void App::client_counter(int increment)  {
+    _clients.fetch_add(increment, std::memory_order_relaxed);
+}
+
 void App::dedup_ft(FTRList &x) {
     if (x.empty()) return;
     auto i = x.begin();
@@ -403,7 +436,9 @@ bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filt
             }
             calc.AND(r);
         }
-        calc.OR(b);
+        if (r) {
+            calc.OR(b);
+        }
     }
     return b;
 
@@ -453,6 +488,20 @@ Event App::get_server_capabilities() const {
         {"limitation", limitation}
     };
     return doc;
+}
+
+cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req) {
+    std::string out;
+    _db->get_level_db().GetProperty("leveldb.approximate-memory-usage", &out);
+    Event ev = {
+            {"active_connections",_clients.load(std::memory_order_relaxed)},
+            {"stored_events", static_cast<std::intmax_t>(_storage.get_rev())},
+            {"database_size", static_cast<std::intmax_t>(_db->get_index_size(docdb::RawKey(0), docdb::RawKey(0xFF)))},
+            {"memory_usage", static_cast<std::intmax_t>(std::strtoul(out.c_str(), nullptr, 10))}};
+    req.add_header(coroserver::http::strtable::hdr_content_type, "application/json");
+    std::string json = ev.to_json();
+    return req.send(std::move(json));
+
 }
 
 bool App::is_home_user(std::string_view pubkey) const {

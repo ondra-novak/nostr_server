@@ -8,13 +8,21 @@
 #include <sstream>
 namespace nostr_server {
 
-Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options)
+Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options,
+        std::string user_agent, std::string ident
+)
 :_req(req)
 ,_app(std::move(app))
 ,_options(std::move(options))
 ,_subscriber(_app->get_publisher())
 ,_rate_limiter(options.event_rate_window, options.event_rate_limit)
 {
+    _sensor.enable(std::move(ident), std::move(user_agent));
+    _shared_sensor.enable();
+    _app->client_counter(1);
+}
+Peer::~Peer() {
+    _app->client_counter(-1);
 }
 
 NAMED_ENUM(Command,
@@ -37,11 +45,14 @@ using namespace coroserver::ws;
 
 cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp app, const ServerOptions & options) {
     std::exception_ptr e;
-    Peer me(req, app, options);
+    auto ua = req[coroserver::http::strtable::hdr_user_agent];
+    std::string ident;
+    if (!options.http_header_ident.empty())  ident = req[options.http_header_ident];
+    if (ident.empty()) ident = req.get_peer_name().to_string();
+    Peer me(req, app, options,ua,ident);
     bool res =co_await Server::accept(me._stream, me._req);
     if (!res) co_return true;
 
-    auto ua = req[coroserver::http::strtable::hdr_user_agent];
     me._req.log_message("Connected client: "+std::string(ua));
 
 
@@ -83,9 +94,9 @@ void Peer::filter_event(const docdb::Structured &doc, Fn fn) const  {
 cocls::future<void> Peer::listen_publisher() {
     bool nx = co_await _subscriber.next();
     while (nx) {
-        const Event &v = _subscriber.value();
-        filter_event(v, [&](const std::string_view &s){
-            send({commands[Command::EVENT], s, &v});
+        const EventSource &v = _subscriber.value();
+        filter_event(v.first, [&](const std::string_view &s){
+            send({commands[Command::EVENT], s, &v.first});
         });
         nx = co_await _subscriber.next();
     }
@@ -103,7 +114,13 @@ void Peer::processMessage(std::string_view msg_text) {
     auto msg = docdb::Structured::from_json(msg_text);
     std::string_view cmd_text = msg[0].as<std::string_view>();
 
+
     Command cmd = commands[cmd_text];
+
+    _sensor.update([&](ClientSensor &szn){
+        ++szn.command_counter;
+    });
+
     switch (cmd) {
         case Command::EVENT:
             if (!check_for_auth()) return;
@@ -127,7 +144,7 @@ void Peer::processMessage(std::string_view msg_text) {
             process_auth(msg[1]);
             break;
         default: {
-            send({commands[Command::NOTICE], std::string("Unknown command: ").append(cmd_text)});
+            send_notice(std::string("Unknown command: ").append(cmd_text));
         }
     }
 }
@@ -148,6 +165,14 @@ public:
 };
 
 
+void Peer::send_error(std::string_view id, std::string_view text) {
+    send({commands[Command::OK], id, false, text});
+    _sensor.update([&](ClientSensor &szn){
+        szn.error_counter++;
+    });
+
+}
+
 void Peer::on_event(docdb::Structured &msg) {
     std::string id;
     try {
@@ -155,18 +180,15 @@ void Peer::on_event(docdb::Structured &msg) {
         docdb::Structured event(std::move(msg.at(1)));
         id = event["id"].as<std::string_view>();
         std::string_view pubkey = event["pubkey"].as<std::string_view>();
-        if (!_no_limit && _options.read_only && _options.replicators.find(pubkey) == _options.replicators.npos) {
-            throw Blocked("Sorry, server is in read_only mode");
-        }
         auto now = std::chrono::system_clock::now();
         if (!_no_limit && !_rate_limiter.test_and_add(now)) {
-            send({commands[Command::OK],id,false,
+            send_error(id,
                 "rate-limited: you can only post "+std::to_string(_options.event_rate_limit)
-                +" events every " + std::to_string(_options.event_rate_window) + " seconds"});
+                +" events every " + std::to_string(_options.event_rate_window) + " seconds");
             return;
         }
         if (!_no_limit && _options.pow>0 && !check_pow(id)){
-            send({commands[Command::OK],id,false,"pow: required difficulty " + std::to_string(_options.pow)});
+            send_error(id,"pow: required difficulty " + std::to_string(_options.pow));
             return;
         }
         if (!_secp.has_value()) {
@@ -176,9 +198,13 @@ void Peer::on_event(docdb::Structured &msg) {
             throw std::invalid_argument("Signature verification failed");
         }
         auto kind = event["kind"].as<unsigned int>();
-        if (kind >= 20000 && kind < 30000) { //empheral event  - do not store
-            _app->get_publisher().publish(std::move(event));
+        if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
+            _app->get_publisher().publish(EventSource{std::move(event),this});
+            _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
             return;
+        }
+        if (!_no_limit && _options.read_only && _options.replicators.find(pubkey) == _options.replicators.npos) {
+            throw Blocked("Sorry, server is in read_only mode");
         }
         if (kind == 5) {
             event_deletion(std::move(event));
@@ -211,20 +237,21 @@ void Peer::on_event(docdb::Structured &msg) {
         if (to_replace != docdb::DocID(-1)) {
             storage.put(event, to_replace);
         }
-        _app->get_publisher().publish(std::move(event));
+        _app->get_publisher().publish(EventSource{std::move(event),this});
         send({commands[Command::OK], id, true, ""});
+        _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
     } catch (const docdb::DuplicateKeyException &e) {
-        send({commands[Command::OK], id, true, "duplicate:"});
+        _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
+        send_error(id, "duplicate:");
     } catch (const Blocked &e) {
-        send({commands[Command::OK], id, false, std::string("blocked: ") + e.what()});
+        send_error(id, std::string("blocked: ") + e.what());
     } catch (const std::invalid_argument &e) {
-        send({commands[Command::OK], id, false, std::string("invalid: ") + e.what()});
+        send_error(id, std::string("invalid: ") + e.what());
     } catch (const std::bad_cast &e) {
-        send({commands[Command::OK], id, false, "invalid: Malformed event"});
+        send_error(id, "invalid: Malformed event");
     } catch (const std::exception &e) {
-        send({commands[Command::OK], id, false, std::string("error:") + e.what()});
+        send_error(id, std::string("error:") + e.what());
     }
-
 }
 
 
@@ -309,6 +336,10 @@ void Peer::on_req(const docdb::Structured &msg) {
     send({commands[Command::EOSE], subid});
 
     _subscriptions.emplace_back(subid, std::move(flts));
+    _sensor.update([&](ClientSensor &szn){
+        ++szn.query_counter;
+        szn.subscriptions = _subscriptions.size();
+     });
 
 }
 
@@ -336,6 +367,10 @@ void Peer::on_close(const docdb::Structured &msg) {
         return s.first == id;
     });
     _subscriptions.erase(iter, _subscriptions.end());
+    _sensor.update([&](ClientSensor &szn){
+        szn.subscriptions = _subscriptions.size();
+        szn.max_subscriptions = std::max(szn.max_subscriptions, szn.subscriptions);
+    });
 }
 
 void Peer::event_deletion(Event &&event) {
@@ -373,9 +408,10 @@ void Peer::event_deletion(Event &&event) {
 
     if (deleted_something) {
         storage.get_db()->commit_batch(b);
-        _app->get_publisher().publish(std::move(event));
+        _app->get_publisher().publish(EventSource{std::move(event),this});
     }
     send({commands[Command::OK], id, true, ""});
+    _sensor.update([&](ClientSensor &szn){szn.report_kind(5);});
 }
 
 bool Peer::check_pow(std::string_view id) const {
@@ -445,12 +481,19 @@ void Peer::process_auth(const Event &event) {
             send({commands[Command::OK], id, true, "Welcome on relay!"});
         }
     } catch (const std::exception &e) {
-        send({commands[Command::OK], id, false, std::string("restricted:") + e.what()});
+        send_error(id,std::string("restricted:") + e.what());
         if (_hello_recv) {
             _stream.close();
         }
     }
 
+}
+
+void Peer::send_notice(std::string_view text) {
+    send({commands[Command::NOTICE],text});
+    _sensor.update([&](ClientSensor &szn){
+        szn.error_counter++;
+    });
 }
 
 bool Peer::check_for_auth() {
@@ -462,8 +505,7 @@ bool Peer::check_for_auth() {
             _auth_sent = true;
             return false;
         } else {
-            send({commands[Command::NOTICE],
-                    "restricted: Authentication is mandatory on this relay"});
+            send_notice("restricted: Authentication is mandatory on this relay");
             return false;
         }
     }

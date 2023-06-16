@@ -70,6 +70,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     auto desc = cfg["description"];
     auto options = cfg["options"];
     auto replication = cfg["replication"];
+    auto metrics = cfg["metrics"];
 
     nostr_server::Config outcfg;
     outcfg.listen_addr = main["listen"].getString("localhost:10000");
@@ -115,6 +116,10 @@ nostr_server::Config init_cfg(int argc, char **argv) {
                     std::string(item.second.getString())});
         }
     }
+
+    outcfg.metric.auth = metrics["auth"].getString();
+    outcfg.metric.enable = metrics["enable"].getBool();
+
 
 
 

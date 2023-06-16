@@ -7,10 +7,12 @@ add_executable(nostr_server
 	signature.cpp
 	fulltext.cpp
 	rate_limiter.cpp	
+	telemetry_def.cpp
 )
 
 target_link_libraries(nostr_server
     coroserver
+    telemetry
     ${LEVELDB_LIB}
     ${SECP256K1_LIBRARIES}
     ${LIBSSL_LIBRARIES}        

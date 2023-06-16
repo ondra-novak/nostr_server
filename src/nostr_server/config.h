@@ -24,12 +24,18 @@ struct ServerOptions {
     bool foreign_relaying;
     bool read_only;
     std::string replicators;
+    std::string http_header_ident;
 };
 
 
 struct ReplicationTask {
     std::string task_name;
     std::string relay_url;
+};
+
+struct OpenMetricConf {
+    bool enable;
+    std::string auth;
 };
 
 
@@ -53,6 +59,7 @@ struct Config {
 
     std::string private_key;
     ReplicationConfig replication_config;
+    OpenMetricConf metric;
 
 };
 
