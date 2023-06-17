@@ -1,614 +1,659 @@
-// Copyright (c) 2017, 2021 Pieter Wuille
-// Copyright (c) 2021 The Bitcoin Core developers
-// Distributed under the MIT software license, see the accompanying
-// file COPYING or http://www.opensource.org/licenses/mit-license.php.
-
 #include "bech32.h"
-#include <initializer_list>
-#include <type_traits>
-#include <utility>
-#include <vector>
+#include <algorithm>
+#include <stdexcept>
 
-#include <array>
-#include <assert.h>
-#include <numeric>
-#include <optional>
+namespace {
 
-namespace bech32
-{
+    using namespace bech32::limits;
 
+    // constant used in checksum generation. see:
+    // https://github.com/bitcoin/bips/blob/master/bip-0173.mediawiki
+    // https://github.com/bitcoin/bips/blob/master/bip-0350.mediawiki
+    const unsigned int M = 0x2bc830a3;
 
-namespace
-{
+    /** The Bech32 character set for encoding. The index into this array gives the char
+     * each value is mapped to, i.e., 0 -> 'q', 10 -> '2', etc. This comes from the table
+     * in BIP-0173 */
+    const char charset[VALID_CHARSET_SIZE] = {
+            'q', 'p', 'z', 'r', 'y', '9', 'x', '8', 'g', 'f', '2', 't', 'v', 'd', 'w', '0', // indexes 0 - F
+            's', '3', 'j', 'n', '5', '4', 'k', 'h', 'c', 'e', '6', 'm', 'u', 'a', '7', 'l'  // indexes 10 - 1F
+    };
 
-/** Construct a vector with the specified elements.
- *
- * This is preferable over the list initializing constructor of std::vector:
- * - It automatically infers the element type from its arguments.
- * - If any arguments are rvalue references, they will be moved into the vector
- *   (list initialization always copies).
- */
-template<typename... Args>
-inline std::vector<typename std::common_type<Args...>::type> Vector(Args&&... args)
-{
-    std::vector<typename std::common_type<Args...>::type> ret;
-    ret.reserve(sizeof...(args));
-    // The line below uses the trick from https://www.experts-exchange.com/articles/32502/None-recursive-variadic-templates-with-std-initializer-list.html
-    (void)std::initializer_list<int>{(ret.emplace_back(std::forward<Args>(args)), 0)...};
-    return ret;
-}
+    /** The Bech32 character set for decoding. This comes from the table in BIP-0173
+     *
+     * This will help map both upper and lowercase chars into the proper code (or index
+     * into the above charset). For instance, 'Q' (ascii 81) and 'q' (ascii 113)
+     * are both set to index 0 in this table. Invalid chars are set to -1 */
+    const int REVERSE_CHARSET_SIZE = 128;
+    const int8_t reverse_charset[REVERSE_CHARSET_SIZE] = {
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
+            15, -1, 10, 17, 21, 20, 26, 30,  7,  5, -1, -1, -1, -1, -1, -1,
+            -1, 29, -1, 24, 13, 25,  9,  8, 23, -1, 18, 22, 31, 27, 19, -1,
+            1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1,
+            -1, 29, -1, 24, 13, 25,  9,  8, 23, -1, 18, 22, 31, 27, 19, -1,
+            1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1
+    };
 
-/** Concatenate two vectors, moving elements. */
-template<typename V>
-inline V Cat(V v1, V&& v2)
-{
-    v1.reserve(v1.size() + v2.size());
-    for (auto& arg : v2) {
-        v1.push_back(std::move(arg));
-    }
-    return v1;
-}
-
-/** Concatenate two vectors. */
-template<typename V>
-inline V Cat(V v1, const V& v2)
-{
-    v1.reserve(v1.size() + v2.size());
-    for (const auto& arg : v2) {
-        v1.push_back(arg);
-    }
-    return v1;
-}
-
-
-
-typedef std::vector<uint8_t> data;
-
-/** The Bech32 and Bech32m character set for encoding. */
-const char* CHARSET = "qpzry9x8gf2tvdw0s3jn54khce6mua7l";
-
-/** The Bech32 and Bech32m character set for decoding. */
-const int8_t CHARSET_REV[128] = {
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1, -1,
-    15, -1, 10, 17, 21, 20, 26, 30,  7,  5, -1, -1, -1, -1, -1, -1,
-    -1, 29, -1, 24, 13, 25,  9,  8, 23, -1, 18, 22, 31, 27, 19, -1,
-     1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1,
-    -1, 29, -1, 24, 13, 25,  9,  8, 23, -1, 18, 22, 31, 27, 19, -1,
-     1,  0,  3, 16, 11, 28, 12, 14,  6,  4,  2, -1, -1, -1, -1, -1
-};
-
-/** We work with the finite field GF(1024) defined as a degree 2 extension of the base field GF(32)
- * The defining polynomial of the extension is x^2 + 9x + 23.
- * Let (e) be a root of this defining polynomial. Then (e) is a primitive element of GF(1024),
- * that is, a generator of the field. Every non-zero element of the field can then be represented
- * as (e)^k for some power k.
- * The array GF1024_EXP contains all these powers of (e) - GF1024_EXP[k] = (e)^k in GF(1024).
- * Conversely, GF1024_LOG contains the discrete logarithms of these powers, so
- * GF1024_LOG[GF1024_EXP[k]] == k.
- * The following function generates the two tables GF1024_EXP and GF1024_LOG as constexprs. */
-constexpr std::pair<std::array<int16_t, 1023>, std::array<int16_t, 1024>> GenerateGFTables()
-{
-    // Build table for GF(32).
-    // We use these tables to perform arithmetic in GF(32) below, when constructing the
-    // tables for GF(1024).
-    std::array<int8_t, 31> GF32_EXP{};
-    std::array<int8_t, 32> GF32_LOG{};
-
-    // fmod encodes the defining polynomial of GF(32) over GF(2), x^5 + x^3 + 1.
-    // Because coefficients in GF(2) are binary digits, the coefficients are packed as 101001.
-    const int fmod = 41;
-
-    // Elements of GF(32) are encoded as vectors of length 5 over GF(2), that is,
-    // 5 binary digits. Each element (b_4, b_3, b_2, b_1, b_0) encodes a polynomial
-    // b_4*x^4 + b_3*x^3 + b_2*x^2 + b_1*x^1 + b_0 (modulo fmod).
-    // For example, 00001 = 1 is the multiplicative identity.
-    GF32_EXP[0] = 1;
-    GF32_LOG[0] = -1;
-    GF32_LOG[1] = 0;
-    int v = 1;
-    for (int i = 1; i < 31; ++i) {
-        // Multiplication by x is the same as shifting left by 1, as
-        // every coefficient of the polynomial is moved up one place.
-        v = v << 1;
-        // If the polynomial now has an x^5 term, we subtract fmod from it
-        // to remain working modulo fmod. Subtraction is the same as XOR in characteristic
-        // 2 fields.
-        if (v & 32) v ^= fmod;
-        GF32_EXP[i] = v;
-        GF32_LOG[v] = i;
-    }
-
-    // Build table for GF(1024)
-    std::array<int16_t, 1023> GF1024_EXP{};
-    std::array<int16_t, 1024> GF1024_LOG{};
-
-    GF1024_EXP[0] = 1;
-    GF1024_LOG[0] = -1;
-    GF1024_LOG[1] = 0;
-
-    // Each element v of GF(1024) is encoded as a 10 bit integer in the following way:
-    // v = v1 || v0 where v0, v1 are 5-bit integers (elements of GF(32)).
-    // The element (e) is encoded as 1 || 0, to represent 1*(e) + 0. Every other element
-    // a*(e) + b is represented as a || b (a and b are both GF(32) elements). Given (v),
-    // we compute (e)*(v) by multiplying in the following way:
-    //
-    // v0' = 23*v1
-    // v1' = 9*v1 + v0
-    // e*v = v1' || v0'
-    //
-    // Where 23, 9 are GF(32) elements encoded as described above. Multiplication in GF(32)
-    // is done using the log/exp tables:
-    // e^x * e^y = e^(x + y) so a * b = EXP[ LOG[a] + LOG [b] ]
-    // for non-zero a and b.
-
-    v = 1;
-    for (int i = 1; i < 1023; ++i) {
-        int v0 = v & 31;
-        int v1 = v >> 5;
-
-        int v0n = v1 ? GF32_EXP.at((GF32_LOG.at(v1) + GF32_LOG.at(23)) % 31) : 0;
-        int v1n = (v1 ? GF32_EXP.at((GF32_LOG.at(v1) + GF32_LOG.at(9)) % 31) : 0) ^ v0;
-
-        v = v1n << 5 | v0n;
-        GF1024_EXP[i] = v;
-        GF1024_LOG[v] = i;
-    }
-
-    return std::make_pair(GF1024_EXP, GF1024_LOG);
-}
-
-constexpr auto tables = GenerateGFTables();
-constexpr const std::array<int16_t, 1023>& GF1024_EXP = tables.first;
-constexpr const std::array<int16_t, 1024>& GF1024_LOG = tables.second;
-
-/* Determine the final constant to use for the specified encoding. */
-uint32_t EncodingConstant(Encoding encoding) {
-    assert(encoding == Encoding::BECH32 || encoding == Encoding::BECH32M);
-    return encoding == Encoding::BECH32 ? 1 : 0x2bc830a3;
-}
-
-/** This function will compute what 6 5-bit values to XOR into the last 6 input values, in order to
- *  make the checksum 0. These 6 values are packed together in a single 30-bit integer. The higher
- *  bits correspond to earlier values. */
-uint32_t PolyMod(const data& v)
-{
-    // The input is interpreted as a list of coefficients of a polynomial over F = GF(32), with an
-    // implicit 1 in front. If the input is [v0,v1,v2,v3,v4], that polynomial is v(x) =
-    // 1*x^5 + v0*x^4 + v1*x^3 + v2*x^2 + v3*x + v4. The implicit 1 guarantees that
-    // [v0,v1,v2,...] has a distinct checksum from [0,v0,v1,v2,...].
-
-    // The output is a 30-bit integer whose 5-bit groups are the coefficients of the remainder of
-    // v(x) mod g(x), where g(x) is the Bech32 generator,
-    // x^6 + {29}x^5 + {22}x^4 + {20}x^3 + {21}x^2 + {29}x + {18}. g(x) is chosen in such a way
-    // that the resulting code is a BCH code, guaranteeing detection of up to 3 errors within a
-    // window of 1023 characters. Among the various possible BCH codes, one was selected to in
-    // fact guarantee detection of up to 4 errors within a window of 89 characters.
-
-    // Note that the coefficients are elements of GF(32), here represented as decimal numbers
-    // between {}. In this finite field, addition is just XOR of the corresponding numbers. For
-    // example, {27} + {13} = {27 ^ 13} = {22}. Multiplication is more complicated, and requires
-    // treating the bits of values themselves as coefficients of a polynomial over a smaller field,
-    // GF(2), and multiplying those polynomials mod a^5 + a^3 + 1. For example, {5} * {26} =
-    // (a^2 + 1) * (a^4 + a^3 + a) = (a^4 + a^3 + a) * a^2 + (a^4 + a^3 + a) = a^6 + a^5 + a^4 + a
-    // = a^3 + 1 (mod a^5 + a^3 + 1) = {9}.
-
-    // During the course of the loop below, `c` contains the bitpacked coefficients of the
-    // polynomial constructed from just the values of v that were processed so far, mod g(x). In
-    // the above example, `c` initially corresponds to 1 mod g(x), and after processing 2 inputs of
-    // v, it corresponds to x^2 + v0*x + v1 mod g(x). As 1 mod g(x) = 1, that is the starting value
-    // for `c`.
-
-    // The following Sage code constructs the generator used:
-    //
-    // B = GF(2) # Binary field
-    // BP.<b> = B[] # Polynomials over the binary field
-    // F_mod = b**5 + b**3 + 1
-    // F.<f> = GF(32, modulus=F_mod, repr='int') # GF(32) definition
-    // FP.<x> = F[] # Polynomials over GF(32)
-    // E_mod = x**2 + F.fetch_int(9)*x + F.fetch_int(23)
-    // E.<e> = F.extension(E_mod) # GF(1024) extension field definition
-    // for p in divisors(E.order() - 1): # Verify e has order 1023.
-    //    assert((e**p == 1) == (p % 1023 == 0))
-    // G = lcm([(e**i).minpoly() for i in range(997,1000)])
-    // print(G) # Print out the generator
-    //
-    // It demonstrates that g(x) is the least common multiple of the minimal polynomials
-    // of 3 consecutive powers (997,998,999) of a primitive element (e) of GF(1024).
-    // That guarantees it is, in fact, the generator of a primitive BCH code with cycle
-    // length 1023 and distance 4. See https://en.wikipedia.org/wiki/BCH_code for more details.
-
-    uint32_t c = 1;
-    for (const auto v_i : v) {
-        // We want to update `c` to correspond to a polynomial with one extra term. If the initial
-        // value of `c` consists of the coefficients of c(x) = f(x) mod g(x), we modify it to
-        // correspond to c'(x) = (f(x) * x + v_i) mod g(x), where v_i is the next input to
-        // process. Simplifying:
-        // c'(x) = (f(x) * x + v_i) mod g(x)
-        //         ((f(x) mod g(x)) * x + v_i) mod g(x)
-        //         (c(x) * x + v_i) mod g(x)
-        // If c(x) = c0*x^5 + c1*x^4 + c2*x^3 + c3*x^2 + c4*x + c5, we want to compute
-        // c'(x) = (c0*x^5 + c1*x^4 + c2*x^3 + c3*x^2 + c4*x + c5) * x + v_i mod g(x)
-        //       = c0*x^6 + c1*x^5 + c2*x^4 + c3*x^3 + c4*x^2 + c5*x + v_i mod g(x)
-        //       = c0*(x^6 mod g(x)) + c1*x^5 + c2*x^4 + c3*x^3 + c4*x^2 + c5*x + v_i
-        // If we call (x^6 mod g(x)) = k(x), this can be written as
-        // c'(x) = (c1*x^5 + c2*x^4 + c3*x^3 + c4*x^2 + c5*x + v_i) + c0*k(x)
-
-        // First, determine the value of c0:
-        uint8_t c0 = c >> 25;
-
-        // Then compute c1*x^5 + c2*x^4 + c3*x^3 + c4*x^2 + c5*x + v_i:
-        c = ((c & 0x1ffffff) << 5) ^ v_i;
-
-        // Finally, for each set bit n in c0, conditionally add {2^n}k(x). These constants can be
-        // computed using the following Sage code (continuing the code above):
-        //
-        // for i in [1,2,4,8,16]: # Print out {1,2,4,8,16}*(g(x) mod x^6), packed in hex integers.
-        //     v = 0
-        //     for coef in reversed((F.fetch_int(i)*(G % x**6)).coefficients(sparse=True)):
-        //         v = v*32 + coef.integer_representation()
-        //     print("0x%x" % v)
-        //
-        if (c0 & 1)  c ^= 0x3b6a57b2; //     k(x) = {29}x^5 + {22}x^4 + {20}x^3 + {21}x^2 + {29}x + {18}
-        if (c0 & 2)  c ^= 0x26508e6d; //  {2}k(x) = {19}x^5 +  {5}x^4 +     x^3 +  {3}x^2 + {19}x + {13}
-        if (c0 & 4)  c ^= 0x1ea119fa; //  {4}k(x) = {15}x^5 + {10}x^4 +  {2}x^3 +  {6}x^2 + {15}x + {26}
-        if (c0 & 8)  c ^= 0x3d4233dd; //  {8}k(x) = {30}x^5 + {20}x^4 +  {4}x^3 + {12}x^2 + {30}x + {29}
-        if (c0 & 16) c ^= 0x2a1462b3; // {16}k(x) = {21}x^5 +     x^4 +  {8}x^3 + {24}x^2 + {21}x + {19}
-
-    }
-    return c;
-}
-
-/** Syndrome computes the values s_j = R(e^j) for j in [997, 998, 999]. As described above, the
- * generator polynomial G is the LCM of the minimal polynomials of (e)^997, (e)^998, and (e)^999.
- *
- * Consider a codeword with errors, of the form R(x) = C(x) + E(x). The residue is the bit-packed
- * result of computing R(x) mod G(X), where G is the generator of the code. Because C(x) is a valid
- * codeword, it is a multiple of G(X), so the residue is in fact just E(x) mod G(x). Note that all
- * of the (e)^j are roots of G(x) by definition, so R((e)^j) = E((e)^j).
- *
- * Let R(x) = r1*x^5 + r2*x^4 + r3*x^3 + r4*x^2 + r5*x + r6
- *
- * To compute R((e)^j), we are really computing:
- * r1*(e)^(j*5) + r2*(e)^(j*4) + r3*(e)^(j*3) + r4*(e)^(j*2) + r5*(e)^j + r6
- *
- * Now note that all of the (e)^(j*i) for i in [5..0] are constants and can be precomputed.
- * But even more than that, we can consider each coefficient as a bit-string.
- * For example, take r5 = (b_5, b_4, b_3, b_2, b_1) written out as 5 bits. Then:
- * r5*(e)^j = b_1*(e)^j + b_2*(2*(e)^j) + b_3*(4*(e)^j) + b_4*(8*(e)^j) + b_5*(16*(e)^j)
- * where all the (2^i*(e)^j) are constants and can be precomputed.
- *
- * Then we just add each of these corresponding constants to our final value based on the
- * bit values b_i. This is exactly what is done in the Syndrome function below.
- */
-constexpr std::array<uint32_t, 25> GenerateSyndromeConstants() {
-    std::array<uint32_t, 25> SYNDROME_CONSTS{};
-    for (int k = 1; k < 6; ++k) {
-        for (int shift = 0; shift < 5; ++shift) {
-            int16_t b = GF1024_LOG.at(1 << shift);
-            int16_t c0 = GF1024_EXP.at((997*k + b) % 1023);
-            int16_t c1 = GF1024_EXP.at((998*k + b) % 1023);
-            int16_t c2 = GF1024_EXP.at((999*k + b) % 1023);
-            uint32_t c = c2 << 20 | c1 << 10 | c0;
-            int ind = 5*(k-1) + shift;
-            SYNDROME_CONSTS[ind] = c;
+    // bech32 string can not mix upper and lower case
+    void rejectBStringMixedCase(const std::string &bstring) {
+        bool atLeastOneUpper = std::any_of(bstring.begin(), bstring.end(), &::isupper);
+        bool atLeastOneLower = std::any_of(bstring.begin(), bstring.end(), &::islower);
+        if(atLeastOneUpper && atLeastOneLower) {
+            throw std::runtime_error("bech32 string is mixed case");
         }
     }
-    return SYNDROME_CONSTS;
+
+    // bech32 string values must be in range ASCII 33-126
+    void rejectBStringValuesOutOfRange(const std::string &bstring) {
+        if(std::any_of(bstring.begin(), bstring.end(), [](char ch){
+            return ch < MIN_BECH32_CHAR_VALUE || ch > MAX_BECH32_CHAR_VALUE; } )) {
+            throw std::runtime_error("bech32 string has value out of range");
+        }
+    }
+
+    // bech32 string can be at most 90 characters long
+    void rejectBStringTooLong(const std::string &bstring) {
+        if (bstring.size() > MAX_BECH32_LENGTH)
+            throw std::runtime_error("bech32 string too long");
+    }
+
+    // bech32 string must be at least 8 chars long: HRP (min 1 char) + '1' + 6-char checksum
+    void rejectBStringTooShort(const std::string &bstring) {
+        if (bstring.size() < MIN_BECH32_LENGTH)
+            throw std::runtime_error("bech32 string too short");
+    }
+
+    // bech32 string must contain the separator character
+    void rejectBStringWithNoSeparator(const std::string &bstring) {
+        if(!std::any_of(bstring.begin(), bstring.end(), [](char ch) { return ch == bech32::separator; })) {
+            throw std::runtime_error("bech32 string is missing separator character");
+        }
+    }
+
+    // bech32 string must conform to rules laid out in BIP-0173
+    void rejectBStringThatIsntWellFormed(const std::string &bstring) {
+        rejectBStringTooShort(bstring);
+        rejectBStringTooLong(bstring);
+        rejectBStringMixedCase(bstring);
+        rejectBStringValuesOutOfRange(bstring);
+        rejectBStringWithNoSeparator(bstring);
+    }
+
+    // return the position of the separator character
+    uint64_t findSeparatorPosition(const std::string &bstring) {
+        return bstring.find_last_of(bech32::separator);
+    }
+
+    // extract the hrp from the string
+    std::string extractHumanReadablePart(const std::string & bstring) {
+        auto pos = findSeparatorPosition(bstring);
+        return bstring.substr(0, pos);
+    }
+
+    // extract the dp from the string
+    std::vector<unsigned char> extractDataPart(const std::string & bstring) {
+        auto pos = findSeparatorPosition(bstring);
+        std::string dpstr = bstring.substr(pos+1);
+        // convert dpstr to dp vector
+        std::vector<unsigned char> dp(bstring.size() - (pos + 1));
+        for(std::string::size_type i = 0; i < dpstr.size(); ++i) {
+            dp[i] = static_cast<unsigned char>(dpstr[i]);
+        }
+        return dp;
+    }
+
+    void convertToLowercase(std::string & str) {
+        std::transform(str.begin(), str.end(), str.begin(), &::tolower);
+    }
+
+    // dp needs to be mapped using the reverse_charset table
+    void mapDP(std::vector<unsigned char> &dp) {
+        for(unsigned char &c : dp) {
+            if(c > REVERSE_CHARSET_SIZE - 1)
+                throw std::runtime_error("data part contains character value out of range");
+            int8_t d = reverse_charset[c];
+            if(d == -1)
+                throw std::runtime_error("data part contains invalid character");
+            c = static_cast<unsigned char>(d);
+        }
+    }
+
+    // using the charset of valid chars, map the incoming data
+    std::string mapToCharset(std::vector<unsigned char> &data) {
+        std::string ret;
+        ret.reserve(data.size());
+        for (unsigned char c : data) {
+            if(c > VALID_CHARSET_SIZE - 1)
+                throw std::runtime_error("data part contains invalid character");
+            ret += charset[c];
+        }
+        return ret;
+    }
+
+    // "expand" the HRP -- adapted from example in BIP-0173
+    //
+    // To expand the chars of the HRP means to create a new collection of
+    // the high bits of each character's ASCII value, followed by a zero,
+    // and then the low bits of each character. See BIP-0173 for rationale.
+    std::vector<unsigned char> expandHrp(const std::string & hrp) {
+        std::string::size_type sz = hrp.size();
+        std::vector<unsigned char> ret(sz * 2 + 1);
+        for(std::string::size_type i=0; i < sz; ++i) {
+            auto c = static_cast<unsigned char>(hrp[i]);
+            ret[i] = c >> 5u;
+            ret[i + sz + 1] = c & static_cast<unsigned char>(0x1f);
+        }
+        ret[sz] = 0;
+        return ret;
+    }
+
+    // Concatenate two vectors
+    std::vector<unsigned char> cat(const std::vector<unsigned char> & x, const std::vector<unsigned char> & y) {
+        std::vector<unsigned char> ret(x);
+        ret.insert(ret.end(), y.begin(), y.end());
+        return ret;
+    }
+
+    // Find the polynomial with value coefficients mod the generator as 30-bit.
+    // Adapted from Pieter Wuille's code in BIP-0173
+    uint32_t polymod(const std::vector<unsigned char> &values) {
+        uint32_t chk = 1;
+        for (unsigned char value : values) {
+            auto top = static_cast<uint8_t>(chk >> 25u);
+            chk = static_cast<uint32_t>(
+                    (chk & 0x1ffffffu) << 5u ^ value ^
+                    (-((top >> 0) & 1u) & 0x3b6a57b2UL) ^
+                    (-((top >> 1) & 1u) & 0x26508e6dUL) ^
+                    (-((top >> 2) & 1u) & 0x1ea119faUL) ^
+                    (-((top >> 3) & 1u) & 0x3d4233ddUL) ^
+                    (-((top >> 4) & 1u) & 0x2a1462b3UL));
+        }
+        return chk;
+    }
+
+    bool verifyChecksum(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        return polymod(cat(expandHrp(hrp), dp)) == M;
+    }
+
+    bool verifyChecksumUsingOriginalConstant(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        return polymod(cat(expandHrp(hrp), dp)) == 1;
+    }
+
+    void stripChecksum(std::vector<unsigned char> &dp) {
+        dp.erase(dp.end() - CHECKSUM_LENGTH, dp.end());
+    }
+
+    std::vector<unsigned char>
+    createChecksum(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        std::vector<unsigned char> c = cat(expandHrp(hrp), dp);
+        c.resize(c.size() + CHECKSUM_LENGTH);
+        uint32_t mod = polymod(c) ^ M;
+        std::vector<unsigned char> ret(CHECKSUM_LENGTH);
+        for(std::vector<unsigned char>::size_type i = 0; i < CHECKSUM_LENGTH; ++i) {
+            ret[i] = static_cast<unsigned char>((mod >> (5 * (5 - i))) & 31u);
+        }
+        return ret;
+    }
+
+    std::vector<unsigned char>
+    createChecksumUsingOriginalConstant(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        std::vector<unsigned char> c = cat(expandHrp(hrp), dp);
+        c.resize(c.size() + CHECKSUM_LENGTH);
+        uint32_t mod = polymod(c) ^ 1;
+        std::vector<unsigned char> ret(CHECKSUM_LENGTH);
+        for(std::vector<unsigned char>::size_type i = 0; i < CHECKSUM_LENGTH; ++i) {
+            ret[i] = static_cast<unsigned char>((mod >> (5 * (5 - i))) & 31u);
+        }
+        return ret;
+    }
+
+    void rejectHRPTooShort(const std::string &hrp) {
+        if(hrp.size() < MIN_HRP_LENGTH)
+            throw std::runtime_error("HRP must be at least one character");
+    }
+
+    void rejectHRPTooLong(const std::string &hrp) {
+        if(hrp.size() > MAX_HRP_LENGTH)
+            throw std::runtime_error("HRP must be less than 84 characters");
+    }
+
+    void rejectDPTooShort(const std::vector<unsigned char> &dp) {
+        if(dp.size() < CHECKSUM_LENGTH)
+            throw std::runtime_error("data part must be at least six characters");
+    }
+
+    // data values must be in range ASCII 0-31 in order to index into the charset
+    void rejectDataValuesOutOfRange(const std::vector<unsigned char> &dp) {
+        if(std::any_of(dp.begin(), dp.end(), [](char ch){ return ch > VALID_CHARSET_SIZE-1; } )) {
+            throw std::runtime_error("data value is out of range");
+        }
+    }
+
+    // length of human part plus length of data part plus separator char plus 6 char
+    // checksum must be less than 90
+    void rejectBothPartsTooLong(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        if(hrp.length() + dp.size() + 1 + CHECKSUM_LENGTH > MAX_BECH32_LENGTH) {
+            throw std::runtime_error("length of hrp + length of dp is too large");
+        }
+    }
+
+    // return true if the arg c is within the allowed charset
+    bool isAllowedChar(std::string::value_type c) {
+        return std::find(std::begin(charset), std::end(charset), c) !=
+                std::end(charset);
+    }
+
 }
-constexpr std::array<uint32_t, 25> SYNDROME_CONSTS = GenerateSyndromeConstants();
+
+
+namespace bech32 {
+
+    // clean a bech32 string of any stray characters not in the allowed charset, except for
+    // the separator character, which is '1'
+    std::string stripUnknownChars(const std::string &bstring) {
+        std::string ret(bstring);
+        ret.erase(
+                std::remove_if(
+                        ret.begin(), ret.end(),
+                        [](char x){return (!isAllowedChar(static_cast<char>(::tolower(x))) && x!=separator);}),
+                ret.end());
+        return ret;
+    }
+
+    // encode a "human-readable part" and a "data part", returning a bech32 string
+    std::string encodeBasis(const std::string &hrp, const std::vector<unsigned char> &dp,
+                            std::vector<unsigned char> (*checksumFunc)(const std::string &, const std::vector<unsigned char> &)) {
+        rejectHRPTooShort(hrp);
+        rejectHRPTooLong(hrp);
+        rejectBothPartsTooLong(hrp, dp);
+        rejectDataValuesOutOfRange(dp);
+
+        std::string hrpCopy = hrp;
+        convertToLowercase(hrpCopy);
+        std::vector<unsigned char> checksum = checksumFunc(hrpCopy, dp);
+        std::string ret = hrpCopy + '1';
+        std::vector<unsigned char> combined = cat(dp, checksum);
+        ret.reserve(ret.size() + combined.size());
+        for (unsigned char c : combined) {
+            if(c > limits::VALID_CHARSET_SIZE - 1)
+                throw std::runtime_error("data part contains invalid character");
+            ret += charset[c];
+        }
+        return ret;
+    }
+
+    // encode a "human-readable part" and a "data part", returning a bech32 string
+    std::string encode(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        return encodeBasis(hrp, dp, &createChecksum);
+    }
+
+    // encode a "human-readable part" and a "data part", returning a bech32 string
+    std::string encodeUsingOriginalConstant(const std::string &hrp, const std::vector<unsigned char> &dp) {
+        return encodeBasis(hrp, dp, &createChecksumUsingOriginalConstant);
+    }
+
+    // decode a bech32 string, returning the "human-readable part" and a "data part"
+    DecodedResult decode(const std::string & bstring) {
+        rejectBStringThatIsntWellFormed(bstring);
+        std::string hrp = extractHumanReadablePart(bstring);
+        std::vector<unsigned char> dp = extractDataPart(bstring);
+        rejectHRPTooShort(hrp);
+        rejectHRPTooLong(hrp);
+        rejectDPTooShort(dp);
+        convertToLowercase(hrp);
+        mapDP(dp);
+        if (verifyChecksum(hrp, dp)) {
+            stripChecksum(dp);
+            return {bech32::Encoding::Bech32m, hrp, dp};
+        }
+        else if (verifyChecksumUsingOriginalConstant(hrp, dp)) {
+            stripChecksum(dp);
+            return {bech32::Encoding::Bech32, hrp, dp};
+        }
+        else {
+            return DecodedResult();
+        }
+    }
+
+}
+
+// C bindings - functions
+
+const char *bech32_errordesc[] = {
+        "Success",
+        "Unknown error",
+        "Function argument was null",
+        "Function argument length was too short",
+        "Invalid Checksum",
+        "Out of Memory",
+        "Max error"
+};
 
 /**
- * Syndrome returns the three values s_997, s_998, and s_999 described above,
- * packed into a 30-bit integer, where each group of 10 bits encodes one value.
+ * Returns error message string corresponding to the error code
+ *
+ * @param error_code the error code to convert
+ *
+ * @return error message string corresponding to the error code
  */
-uint32_t Syndrome(const uint32_t residue) {
-    // low is the first 5 bits, corresponding to the r6 in the residue
-    // (the constant term of the polynomial).
-    uint32_t low = residue & 0x1f;
-
-    // We begin by setting s_j = low = r6 for all three values of j, because these are unconditional.
-    uint32_t result = low ^ (low << 10) ^ (low << 20);
-
-    // Then for each following bit, we add the corresponding precomputed constant if the bit is 1.
-    // For example, 0x31edd3c4 is 1100011110 1101110100 1111000100 when unpacked in groups of 10
-    // bits, corresponding exactly to a^999 || a^998 || a^997 (matching the corresponding values in
-    // GF1024_EXP above). In this way, we compute all three values of s_j for j in (997, 998, 999)
-    // simultaneously. Recall that XOR corresponds to addition in a characteristic 2 field.
-    for (int i = 0; i < 25; ++i) {
-        result ^= ((residue >> (5+i)) & 1 ? SYNDROME_CONSTS.at(i) : 0);
+extern "C"
+const char * bech32_strerror(bech32_error error_code) {
+    const char * result = "";
+    if(error_code >= E_BECH32_SUCCESS && error_code < E_BECH32_MAX_ERROR) {
+        result = bech32_errordesc[error_code];
     }
+    else
+        result = bech32_errordesc[E_BECH32_UNKNOWN_ERROR];
     return result;
 }
 
-/** Convert to lower case. */
-inline unsigned char LowerCase(unsigned char c)
-{
-    return (c >= 'A' && c <= 'Z') ? (c - 'A') + 'a' : c;
+/**
+ * Allocates memory for a bech32_DecodedResult struct based on the size of the bech32 string passed in.
+ *
+ * This memory must be freed using bech32_free_DecodedResult().
+ *
+ * @param str the bech32 string to be decoded by bech32_decode()
+ *
+ * @return a pointer to a new bech32_DecodedResult struct, or NULL if error
+ */
+extern "C"
+bech32_DecodedResult * bech32_create_DecodedResult(const char *str) {
+    if(str == nullptr)
+        return nullptr;
+    // the storage needed for a decoded bech32 string can be easily determined by the
+    // length of the input string
+    std::string inputStr(str);
+    if(inputStr.size() < MIN_BECH32_LENGTH)
+        return nullptr;
+    size_t index_of_separator = inputStr.find_first_of(bech32::separator);
+    if(index_of_separator == std::string::npos)
+        return nullptr;
+    size_t number_of_hrp_characters = index_of_separator;
+    if(inputStr.length() - number_of_hrp_characters - 1 < bech32::limits::CHECKSUM_LENGTH)
+        // not enough data characters
+        return nullptr;
+    size_t number_of_data_characters =
+            inputStr.length()
+            - number_of_hrp_characters
+            - bech32::limits::SEPARATOR_LENGTH
+            - bech32::limits::CHECKSUM_LENGTH;
+
+    auto hrpdp = static_cast<bech32_DecodedResult *>(malloc(sizeof (bech32_DecodedResult)));
+    if(hrpdp == nullptr)
+        return nullptr;
+    hrpdp->hrplen = number_of_hrp_characters;
+    hrpdp->hrp = static_cast<char *>(calloc(hrpdp->hrplen+1, 1)); // +1 for '\0'
+    if(hrpdp->hrp == nullptr) {
+        free(hrpdp);
+        return nullptr;
+    }
+    hrpdp->dplen = number_of_data_characters;
+    hrpdp->dp = static_cast<unsigned char *>(calloc(hrpdp->dplen, 1));
+    if(hrpdp->dp == nullptr) {
+        free(hrpdp->hrp);
+        free(hrpdp);
+        return nullptr;
+    }
+
+    hrpdp->encoding = ENCODING_INVALID;
+
+    return hrpdp;
 }
 
-/** Return indices of invalid characters in a Bech32 string. */
-bool CheckCharacters(const std::string& str, std::vector<int>& errors)
-{
-    bool lower = false, upper = false;
-    for (size_t i = 0; i < str.size(); ++i) {
-        unsigned char c{(unsigned char)(str[i])};
-        if (c >= 'a' && c <= 'z') {
-            if (upper) {
-                errors.push_back(i);
-            } else {
-                lower = true;
-            }
-        } else if (c >= 'A' && c <= 'Z') {
-            if (lower) {
-                errors.push_back(i);
-            } else {
-                upper = true;
-            }
-        } else if (c < 33 || c > 126) {
-            errors.push_back(i);
-        }
-    }
-    return errors.empty();
+/**
+ * Frees memory for a bech32_DecodedResult struct.
+ *
+ * @param decodedResult a pointer to a bech32_DecodedResult struct
+ */
+extern "C"
+void bech32_free_DecodedResult(bech32_DecodedResult *decodedResult) {
+    if(decodedResult == nullptr)
+        return;
+    free(decodedResult->dp);
+    free(decodedResult->hrp);
+    free(decodedResult);
 }
 
-/** Expand a HRP for use in checksum computation. */
-data ExpandHRP(const std::string& hrp)
-{
-    data ret;
-    ret.reserve(hrp.size() + 90);
-    ret.resize(hrp.size() * 2 + 1);
-    for (size_t i = 0; i < hrp.size(); ++i) {
-        unsigned char c = hrp[i];
-        ret[i] = c >> 5;
-        ret[i + hrp.size() + 1] = c & 0x1f;
-    }
-    ret[hrp.size()] = 0;
-    return ret;
+/**
+ * Computes final length for a to-be-encoded bech32 string
+ *
+ * @param hrplen the length of the "human-readable part" string. must be > 0
+ * @param dplen the length of the "data part" array
+ *
+ * @return length of to-be-encoded bech32 string
+ */
+extern "C"
+size_t bech32_compute_encoded_string_length(size_t hrplen, size_t dplen) {
+    return hrplen + SEPARATOR_LENGTH + dplen + CHECKSUM_LENGTH;
 }
 
-/** Verify a checksum. */
-Encoding VerifyChecksum(const std::string& hrp, const data& values)
-{
-    // PolyMod computes what value to xor into the final values to make the checksum 0. However,
-    // if we required that the checksum was 0, it would be the case that appending a 0 to a valid
-    // list of values would result in a new valid list. For that reason, Bech32 requires the
-    // resulting checksum to be 1 instead. In Bech32m, this constant was amended. See
-    // https://gist.github.com/sipa/14c248c288c3880a3b191f978a34508e for details.
-    const uint32_t check = PolyMod(Cat(ExpandHRP(hrp), values));
-    if (check == EncodingConstant(Encoding::BECH32)) return Encoding::BECH32;
-    if (check == EncodingConstant(Encoding::BECH32M)) return Encoding::BECH32M;
-    return Encoding::INVALID;
+/**
+ * Allocates memory for a to-be-encoded bech32 string
+ *
+ * This memory must be freed using bech32_free_bstring().
+ *
+ * @param hrplen the length of the "human-readable part" string. must be > 0
+ * @param dplen the length of the "data part" array
+ *
+ * @return a pointer to a new bech32_bstring struct, or NULL if error
+ */
+extern "C"
+bech32_bstring * bech32_create_bstring(size_t hrplen, size_t dplen) {
+    if(hrplen < 1)
+        return nullptr;
+    auto *bstring = static_cast<bech32_bstring *>(malloc(sizeof(bech32_bstring)));
+    if(bstring == nullptr)
+        return nullptr;
+    bstring->length = bech32_compute_encoded_string_length(hrplen, dplen);
+    bstring->string = static_cast<char *>(calloc(bstring->length + 1, 1)); // +1 for '\0'
+    if(bstring->string == nullptr) {
+        bech32_free_bstring(bstring);
+        return nullptr;
+    }
+    return bstring;
 }
 
-/** Create a checksum. */
-data CreateChecksum(Encoding encoding, const std::string& hrp, const data& values)
-{
-    data enc = Cat(ExpandHRP(hrp), values);
-    enc.resize(enc.size() + 6); // Append 6 zeroes
-    uint32_t mod = PolyMod(enc) ^ EncodingConstant(encoding); // Determine what to XOR into those 6 zeroes.
-    data ret(6);
-    for (size_t i = 0; i < 6; ++i) {
-        // Convert the 5-bit groups in mod to checksum values.
-        ret[i] = (mod >> (5 * (5 - i))) & 31;
-    }
-    return ret;
+/**
+ * Allocates memory for a to-be-encoded bech32 string based on the size of the bech32_DecodedResult struct
+ *
+ * This memory must be freed using bech32_free_bstring().
+ *
+ * @param decodedResult a pointer to a bech32_DecodedResult struct
+ *
+ * @return a pointer to a new bech32_bstring struct, or NULL if error
+ */
+extern "C"
+bech32_bstring * bech32_create_bstring_from_DecodedResult(bech32_DecodedResult *decodedResult) {
+    if(decodedResult == nullptr)
+        return nullptr;
+    if(decodedResult->hrplen < 1)
+        return nullptr;
+    return bech32_create_bstring(decodedResult->hrplen, decodedResult->dplen);
 }
 
-} // namespace
-
-/** Encode a Bech32 or Bech32m string. */
-std::string Encode(Encoding encoding, const std::string& hrp, const data& values) {
-    // First ensure that the HRP is all lowercase. BIP-173 and BIP350 require an encoder
-    // to return a lowercase Bech32/Bech32m string, but if given an uppercase HRP, the
-    // result will always be invalid.
-    for (const char& c : hrp) assert(c < 'A' || c > 'Z');
-    data checksum = CreateChecksum(encoding, hrp, values);
-    data combined = Cat(values, checksum);
-    std::string ret = hrp + '1';
-    ret.reserve(ret.size() + combined.size());
-    for (const auto c : combined) {
-        ret += CHARSET[c];
-    }
-    return ret;
+/**
+ * Frees memory for a bech32 string.
+ *
+ * @param bstring pointer to a bech32_bstring struct
+ */
+extern "C"
+void bech32_free_bstring(bech32_bstring *bstring) {
+    if(bstring == nullptr)
+        return;
+    free(bstring->string);
+    free(bstring);
 }
 
-/** Decode a Bech32 or Bech32m string. */
-DecodeResult Decode(const std::string& str) {
-    std::vector<int> errors;
-    if (!CheckCharacters(str, errors)) return {};
-    size_t pos = str.rfind('1');
-    if (str.size() > 90 || pos == str.npos || pos == 0 || pos + 7 > str.size()) {
-        return {};
-    }
-    data values(str.size() - 1 - pos);
-    for (size_t i = 0; i < str.size() - 1 - pos; ++i) {
-        unsigned char c = str[i + pos + 1];
-        int8_t rev = CHARSET_REV[c];
+/**
+ * clean a bech32 string of any stray characters not in the allowed charset, except for the
+ * separator character, which is '1'
+ *
+ * dstlen should be at least as large as srclen
+ *
+ * @param dst pointer to memory to put the cleaned string
+ * @param src pointer to the string to be cleaned
+ *
+ * @return E_BECH32_SUCCESS on success, others on error (e.g., input/output is NULL, output not
+ * long enough for string)
+ */
+extern "C"
+bech32_error bech32_stripUnknownChars(
+        char *dst, size_t dstlen,
+        const char *src, size_t srclen) {
 
-        if (rev == -1) {
-            return {};
-        }
-        values[i] = rev;
-    }
-    std::string hrp;
-    for (size_t i = 0; i < pos; ++i) {
-        hrp += LowerCase(str[i]);
-    }
-    Encoding result = VerifyChecksum(hrp, values);
-    if (result == Encoding::INVALID) return {};
-    return {result, std::move(hrp), data(values.begin(), values.end() - 6)};
+    if(src == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(dst == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(dstlen > srclen)
+        return E_BECH32_LENGTH_TOO_SHORT;
+
+    std::string inputStr(src);
+    std::string result = bech32::stripUnknownChars(inputStr);
+    if(dstlen < result.size()+1)
+        return E_BECH32_LENGTH_TOO_SHORT;
+
+    std::copy_n(result.begin(), result.size(), dst);
+    dst[result.size()] = '\0';
+
+    return E_BECH32_SUCCESS;
 }
 
-/** Find index of an incorrect character in a Bech32 string. */
-std::pair<std::string, std::vector<int>> LocateErrors(const std::string& str) {
-    std::vector<int> error_locations{};
+/**
+ * encode a "human-readable part" (ex: "xyz") and a "data part" (ex: {1,2,3}), returning a
+ * bech32m string
+ *
+ * @param bstring pointer to a bech32_bstring struct to store the encoded bech32 string.
+ * @param hrp pointer to the "human-readable part"
+ * @param dp pointer to the "data part"
+ * @param dplen the length of the "data part" array
+ *
+ * @return E_BECH32_SUCCESS on success, others on error (e.g., hrp/dp/bstring is NULL, bstring not
+ * long enough for bech32 string)
+ */
+extern "C"
+bech32_error bech32_encode(
+        bech32_bstring *bstring,
+        const char *hrp,
+        const unsigned char *dp, size_t dplen) {
 
-    if (str.size() > 90) {
-        error_locations.resize(str.size() - 90);
-        std::iota(error_locations.begin(), error_locations.end(), 90);
-        return std::make_pair("Bech32 string too long", std::move(error_locations));
+    if(bstring == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(hrp == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(dp == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+
+    std::string hrpStr(hrp);
+    std::vector<unsigned char> dpVec(dp, dp + dplen);
+
+    std::string b;
+    try {
+        b = bech32::encode(hrpStr, dpVec);
     }
-
-    if (!CheckCharacters(str, error_locations)){
-        return std::make_pair("Invalid character or mixed case", std::move(error_locations));
+    catch (std::exception &) {
+        // todo: convert exception message
+        return E_BECH32_UNKNOWN_ERROR;
     }
+    if(b.size() > bstring->length)
+        return E_BECH32_LENGTH_TOO_SHORT;
 
-    size_t pos = str.rfind('1');
-    if (pos == str.npos) {
-        return std::make_pair("Missing separator", std::vector<int>{});
-    }
-    if (pos == 0 || pos + 7 > str.size()) {
-        error_locations.push_back(pos);
-        return std::make_pair("Invalid separator position", std::move(error_locations));
-    }
+    std::copy_n(b.begin(), b.size(), bstring->string);
+    bstring->string[b.size()] = '\0';
 
-    std::string hrp;
-    for (size_t i = 0; i < pos; ++i) {
-        hrp += LowerCase(str[i]);
-    }
-
-    size_t length = str.size() - 1 - pos; // length of data part
-    data values(length);
-    for (size_t i = pos + 1; i < str.size(); ++i) {
-        unsigned char c = str[i];
-        int8_t rev = CHARSET_REV[c];
-        if (rev == -1) {
-            error_locations.push_back(i);
-            return std::make_pair("Invalid Base 32 character", std::move(error_locations));
-        }
-        values[i - pos - 1] = rev;
-    }
-
-    // We attempt error detection with both bech32 and bech32m, and choose the one with the fewest errors
-    // We can't simply use the segwit version, because that may be one of the errors
-    std::optional<Encoding> error_encoding;
-    for (Encoding encoding : {Encoding::BECH32, Encoding::BECH32M}) {
-        std::vector<int> possible_errors;
-        // Recall that (ExpandHRP(hrp) ++ values) is interpreted as a list of coefficients of a polynomial
-        // over GF(32). PolyMod computes the "remainder" of this polynomial modulo the generator G(x).
-        uint32_t residue = PolyMod(Cat(ExpandHRP(hrp), values)) ^ EncodingConstant(encoding);
-
-        // All valid codewords should be multiples of G(x), so this remainder (after XORing with the encoding
-        // constant) should be 0 - hence 0 indicates there are no errors present.
-        if (residue != 0) {
-            // If errors are present, our polynomial must be of the form C(x) + E(x) where C is the valid
-            // codeword (a multiple of G(x)), and E encodes the errors.
-            uint32_t syn = Syndrome(residue);
-
-            // Unpack the three 10-bit syndrome values
-            int s0 = syn & 0x3FF;
-            int s1 = (syn >> 10) & 0x3FF;
-            int s2 = syn >> 20;
-
-            // Get the discrete logs of these values in GF1024 for more efficient computation
-            int l_s0 = GF1024_LOG.at(s0);
-            int l_s1 = GF1024_LOG.at(s1);
-            int l_s2 = GF1024_LOG.at(s2);
-
-            // First, suppose there is only a single error. Then E(x) = e1*x^p1 for some position p1
-            // Then s0 = E((e)^997) = e1*(e)^(997*p1) and s1 = E((e)^998) = e1*(e)^(998*p1)
-            // Therefore s1/s0 = (e)^p1, and by the same logic, s2/s1 = (e)^p1 too.
-            // Hence, s1^2 == s0*s2, which is exactly the condition we check first:
-            if (l_s0 != -1 && l_s1 != -1 && l_s2 != -1 && (2 * l_s1 - l_s2 - l_s0 + 2046) % 1023 == 0) {
-                // Compute the error position p1 as l_s1 - l_s0 = p1 (mod 1023)
-                size_t p1 = (l_s1 - l_s0 + 1023) % 1023; // the +1023 ensures it is positive
-                // Now because s0 = e1*(e)^(997*p1), we get e1 = s0/((e)^(997*p1)). Remember that (e)^1023 = 1,
-                // so 1/((e)^997) = (e)^(1023-997).
-                int l_e1 = l_s0 + (1023 - 997) * p1;
-                // Finally, some sanity checks on the result:
-                // - The error position should be within the length of the data
-                // - e1 should be in GF(32), which implies that e1 = (e)^(33k) for some k (the 31 non-zero elements
-                // of GF(32) form an index 33 subgroup of the 1023 non-zero elements of GF(1024)).
-                if (p1 < length && !(l_e1 % 33)) {
-                    // Polynomials run from highest power to lowest, so the index p1 is from the right.
-                    // We don't return e1 because it is dangerous to suggest corrections to the user,
-                    // the user should check the address themselves.
-                    possible_errors.push_back(str.size() - p1 - 1);
-                }
-            // Otherwise, suppose there are two errors. Then E(x) = e1*x^p1 + e2*x^p2.
-            } else {
-                // For all possible first error positions p1
-                for (size_t p1 = 0; p1 < length; ++p1) {
-                    // We have guessed p1, and want to solve for p2. Recall that E(x) = e1*x^p1 + e2*x^p2, so
-                    // s0 = E((e)^997) = e1*(e)^(997^p1) + e2*(e)^(997*p2), and similar for s1 and s2.
-                    //
-                    // Consider s2 + s1*(e)^p1
-                    //          = 2e1*(e)^(999^p1) + e2*(e)^(999*p2) + e2*(e)^(998*p2)*(e)^p1
-                    //          = e2*(e)^(999*p2) + e2*(e)^(998*p2)*(e)^p1
-                    //    (Because we are working in characteristic 2.)
-                    //          = e2*(e)^(998*p2) ((e)^p2 + (e)^p1)
-                    //
-                    int s2_s1p1 = s2 ^ (s1 == 0 ? 0 : GF1024_EXP.at((l_s1 + p1) % 1023));
-                    if (s2_s1p1 == 0) continue;
-                    int l_s2_s1p1 = GF1024_LOG.at(s2_s1p1);
-
-                    // Similarly, s1 + s0*(e)^p1
-                    //          = e2*(e)^(997*p2) ((e)^p2 + (e)^p1)
-                    int s1_s0p1 = s1 ^ (s0 == 0 ? 0 : GF1024_EXP.at((l_s0 + p1) % 1023));
-                    if (s1_s0p1 == 0) continue;
-                    int l_s1_s0p1 = GF1024_LOG.at(s1_s0p1);
-
-                    // So, putting these together, we can compute the second error position as
-                    // (e)^p2 = (s2 + s1^p1)/(s1 + s0^p1)
-                    // p2 = log((e)^p2)
-                    size_t p2 = (l_s2_s1p1 - l_s1_s0p1 + 1023) % 1023;
-
-                    // Sanity checks that p2 is a valid position and not the same as p1
-                    if (p2 >= length || p1 == p2) continue;
-
-                    // Now we want to compute the error values e1 and e2.
-                    // Similar to above, we compute s1 + s0*(e)^p2
-                    //          = e1*(e)^(997*p1) ((e)^p1 + (e)^p2)
-                    int s1_s0p2 = s1 ^ (s0 == 0 ? 0 : GF1024_EXP.at((l_s0 + p2) % 1023));
-                    if (s1_s0p2 == 0) continue;
-                    int l_s1_s0p2 = GF1024_LOG.at(s1_s0p2);
-
-                    // And compute (the log of) 1/((e)^p1 + (e)^p2))
-                    int inv_p1_p2 = 1023 - GF1024_LOG.at(GF1024_EXP.at(p1) ^ GF1024_EXP.at(p2));
-
-                    // Then (s1 + s0*(e)^p1) * (1/((e)^p1 + (e)^p2)))
-                    //         = e2*(e)^(997*p2)
-                    // Then recover e2 by dividing by (e)^(997*p2)
-                    int l_e2 = l_s1_s0p1 + inv_p1_p2 + (1023 - 997) * p2;
-                    // Check that e2 is in GF(32)
-                    if (l_e2 % 33) continue;
-
-                    // In the same way, (s1 + s0*(e)^p2) * (1/((e)^p1 + (e)^p2)))
-                    //         = e1*(e)^(997*p1)
-                    // So recover e1 by dividing by (e)^(997*p1)
-                    int l_e1 = l_s1_s0p2 + inv_p1_p2 + (1023 - 997) * p1;
-                    // Check that e1 is in GF(32)
-                    if (l_e1 % 33) continue;
-
-                    // Again, we do not return e1 or e2 for safety.
-                    // Order the error positions from the left of the string and return them
-                    if (p1 > p2) {
-                        possible_errors.push_back(str.size() - p1 - 1);
-                        possible_errors.push_back(str.size() - p2 - 1);
-                    } else {
-                        possible_errors.push_back(str.size() - p2 - 1);
-                        possible_errors.push_back(str.size() - p1 - 1);
-                    }
-                    break;
-                }
-            }
-        } else {
-            // No errors
-            return std::make_pair("", std::vector<int>{});
-        }
-
-        if (error_locations.empty() || (!possible_errors.empty() && possible_errors.size() < error_locations.size())) {
-            error_locations = std::move(possible_errors);
-            if (!error_locations.empty()) error_encoding = encoding;
-        }
-    }
-    std::string error_message = error_encoding == Encoding::BECH32M ? "Invalid Bech32m checksum"
-                              : error_encoding == Encoding::BECH32 ? "Invalid Bech32 checksum"
-                              : "Invalid checksum";
-
-    return std::make_pair(error_message, std::move(error_locations));
+    return E_BECH32_SUCCESS;
 }
 
-} // namespace bech32
+/**
+ * encode a "human-readable part" (ex: "xyz") and a "data part" (ex: {1,2,3}), returning a
+ * bech32 string
+ *
+ * @param bstring pointer to a bech32_bstring struct to store the encoded bech32 string.
+ * @param hrp pointer to the "human-readable part"
+ * @param dp pointer to the "data part"
+ * @param dplen the length of the "data part" array
+ *
+ * @return E_BECH32_SUCCESS on success, others on error (e.g., hrp/dp/sbtring is NULL, bstring not
+ * long enough for bech32 string)
+ */
+extern "C"
+bech32_error bech32_encode_using_original_constant(
+        bech32_bstring *bstring,
+        const char *hrp,
+        const unsigned char *dp, size_t dplen) {
+
+    if(bstring == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(hrp == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(dp == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+
+    std::string hrpStr(hrp);
+    std::vector<unsigned char> dpVec(dp, dp + dplen);
+
+    std::string b;
+    try {
+        b = bech32::encodeUsingOriginalConstant(hrpStr, dpVec);
+    }
+    catch (std::exception &) {
+        // todo: convert exception message
+        return E_BECH32_UNKNOWN_ERROR;
+    }
+    if(b.size() > bstring->length)
+        return E_BECH32_LENGTH_TOO_SHORT;
+
+    std::copy_n(b.begin(), b.size(), bstring->string);
+    bstring->string[b.size()] = '\0';
+
+    return E_BECH32_SUCCESS;
+}
+
+/**
+ * decode a bech32 string, returning the "human-readable part" and a "data part"
+ *
+ * @param decodedResult pointer to struct to copy the decoded "human-readable part" and "data part"
+ * @param str the bech32 string to decode
+ *
+ * @return E_BECH32_SUCCESS on success, others on error (e.g., output is NULL, hrp/dp not
+ * long enough for decoded bech32 data)
+ */
+extern "C"
+bech32_error bech32_decode(bech32_DecodedResult *decodedResult, char const *str) {
+
+    if(decodedResult == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(decodedResult->hrp == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(decodedResult->dp == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+    if(str == nullptr)
+        return E_BECH32_NULL_ARGUMENT;
+
+    std::string inputStr(str);
+
+    bech32::DecodedResult localResult;
+    try {
+        localResult = bech32::decode(inputStr);
+    } catch (std::exception &) {
+        // todo: convert exception message
+        return E_BECH32_UNKNOWN_ERROR;
+    }
+
+    if(localResult.hrp.empty() && localResult.dp.empty())
+        return E_BECH32_INVALID_CHECKSUM;
+
+    if(localResult.hrp.size() > decodedResult->hrplen)
+        return E_BECH32_LENGTH_TOO_SHORT;
+    if(localResult.dp.size() > decodedResult->dplen)
+        return E_BECH32_LENGTH_TOO_SHORT;
+
+    decodedResult->encoding = static_cast<bech32_encoding>(localResult.encoding);
+    std::copy_n(localResult.hrp.begin(), localResult.hrp.size(), decodedResult->hrp);
+    decodedResult->hrp[localResult.hrp.size()] = '\0';
+    std::copy_n(localResult.dp.begin(), localResult.dp.size(), decodedResult->dp);
+
+    return E_BECH32_SUCCESS;
+}

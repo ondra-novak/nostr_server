@@ -21,6 +21,7 @@ class SignatureTools {
 public:
 
     using HashSha256 = std::array<unsigned char, 32>;
+    using SharedSecret = std::array<unsigned char, 32>;
     using PrivateKey = std::array<unsigned char, 32>;
     using PublicKey = std::array<unsigned char, 32>;
 
@@ -59,6 +60,24 @@ public:
 
     static bool from_nsec(const std::string &nsec, PrivateKey &pk);
     static std::string from_npub(const std::string &npub);
+
+    ///Create encrypted message
+    /**
+     * @param pk private key
+     * @param to_publickey public key of receiver
+     * @param text text
+     * @return event
+     */
+    std::optional<Event> create_private_message(const PrivateKey &pk, const std::string_view &to_publickey, const std::string_view &text, std::time_t created_at);
+    ///Decrypt private message
+    /**
+     * @param pk private key
+     * @param ev event containing message
+     * @return text of the message, or empty, if message cannot be decrypted
+     */
+    std::optional<std::string> decrypt_private_message(const PrivateKey &pk, const Event &ev);
+
+    bool create_shared_secret(const PrivateKey &pk, const std::string_view &to_publickey, SharedSecret &secret);
 
 protected:
     struct Deleter {

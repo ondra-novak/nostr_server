@@ -12,6 +12,7 @@
 #include <coroserver/http_ws_server.h>
 #include <docdb/json.h>
 #include <sstream>
+
 namespace nostr_server {
 
 const Event App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};

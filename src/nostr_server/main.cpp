@@ -2,6 +2,8 @@
 
 #include "config.h"
 #include "app.h"
+#include "relay_bot.h"
+
 
 #include <nostr_server_version.h>
 #include <shared/ini_config.h>
@@ -71,6 +73,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     auto options = cfg["options"];
     auto replication = cfg["replication"];
     auto metrics = cfg["metrics"];
+    auto relaybot = cfg["relaybot"];
 
     nostr_server::Config outcfg;
     outcfg.listen_addr = main["listen"].getString("localhost:10000");
@@ -120,6 +123,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.metric.auth = metrics["auth"].getString();
     outcfg.metric.enable = metrics["enable"].getBool();
 
+    outcfg.botcfg.nsec = relaybot["private_key"].getString();
 
 
 
@@ -153,9 +157,13 @@ int main(int argc, char **argv) {
         auto app = std::make_shared<nostr_server::App>(cfg);
         app->init_handlers(server);
 
+        nostr_server::RelayBot::run_bot(app.get(),cfg.botcfg).detach();
+
         auto task = server.start(std::move(listener),coroserver::http::DefaultLogger([](std::string_view line){
             std::cout << line << std::endl;
         }));
+
+
 
         coroserver::SignalHandler hndl(ctx);
         hndl({SIGINT, SIGTERM}).wait();

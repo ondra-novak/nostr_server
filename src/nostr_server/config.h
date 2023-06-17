@@ -41,6 +41,11 @@ struct OpenMetricConf {
 
 using ReplicationConfig = std::vector<ReplicationTask>;
 
+
+struct RelayBotConfig {
+    std::string nsec;
+};
+
 struct Config {
 
     std::string listen_addr;
@@ -60,6 +65,8 @@ struct Config {
     std::string private_key;
     ReplicationConfig replication_config;
     OpenMetricConf metric;
+    RelayBotConfig botcfg;
+
 
 };
 
