@@ -8,6 +8,7 @@ add_executable(nostr_server
 	fulltext.cpp
 	rate_limiter.cpp	
 	telemetry_def.cpp
+	bech32.cpp
 )
 
 target_link_libraries(nostr_server
