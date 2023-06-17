@@ -68,6 +68,7 @@ public:
     virtual Event get_server_capabilities() const = 0;
     virtual bool is_home_user(std::string_view pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
+    virtual void publish(Event &&ev, const void *publisher) = 0;
 
 };
 

@@ -107,6 +107,7 @@ bool SignatureTools::sign(const PrivateKey &key, Event &event) const {
     unsigned char sig64[64];
     HashSha256 hash;
     get_hash(event, hash);
+    event.set("id",to_hex(hash.data(), hash.size()));
     if (secp256k1_schnorrsig_sign(ctx.get(), sig64, hash.data(), &kp, nullptr)) {
         event.set("sig", to_hex(sig64, sizeof(sig64)));
         return true;
@@ -241,7 +242,7 @@ std::optional<Event> SignatureTools::create_private_message(const PrivateKey &pk
             {"kind",4},
             {"created_at", created_at},
             {"tags",Event::Array {
-                    {"p",to_publickey}
+                    {"p",std::string(to_publickey)}
             }}
     };
     sign(pk, out_ev);

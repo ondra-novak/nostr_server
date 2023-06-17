@@ -26,6 +26,13 @@ cocls::async<void> RelayBot::run_bot(IApp * app, RelayBotConfig cfg) {
             if (iter != tags.end()) {
                 auto msg = bot._sigtool.decrypt_private_message(bot._pk, ev);
                 if (msg.has_value()) {
+                    if (msg->compare(0,6,"/ping ") == 0) {
+                        auto v = bot._sigtool.create_private_message(bot._pk, ev["pubkey"].as<std::string_view>(), *msg,
+                                std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+                        if (v.has_value()) {
+                            app->publish(std::move(*v),nullptr);
+                        }
+                    }
                     std::cout << *msg << std::endl;
                 }
             }

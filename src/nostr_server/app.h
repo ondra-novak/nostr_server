@@ -40,6 +40,7 @@ public:
     virtual Event get_server_capabilities() const override;
     virtual bool is_home_user(std::string_view pubkey) const override;
     virtual void client_counter(int increment) override;
+    virtual void publish(Event &&ev, const void *publisher) override;
 protected:
     coroserver::http::StaticPage static_page;
 

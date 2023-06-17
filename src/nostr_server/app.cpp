@@ -510,4 +510,12 @@ bool App::is_home_user(std::string_view pubkey) const {
     return fnd;
 }
 
+void App::publish(Event &&event, const void *publisher)  {
+    auto to_replace = doc_to_replace(event);
+    if (to_replace != docdb::DocID(-1)) {
+        _storage.put(event, to_replace);
+    }
+    event_publish.publish(EventSource{std::move(event),publisher});
+}
+
 } /* namespace nostr_server */
