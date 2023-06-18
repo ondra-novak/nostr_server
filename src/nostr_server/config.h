@@ -44,6 +44,10 @@ using ReplicationConfig = std::vector<ReplicationTask>;
 
 struct RelayBotConfig {
     std::string nsec;
+    std::string admin;
+    std::string this_relay_url;
+    std::string groups;
+
 };
 
 struct Config {

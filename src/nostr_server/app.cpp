@@ -275,6 +275,15 @@ docdb::DocID App::doc_to_replace(const Event &event) const {
         }
     }, event);
     return to_replace;
+}
+
+docdb::DocID App::find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const {
+    auto r = _index_replaceable.find({pubkey,kind,category});
+    if (r) {
+        return r->id;
+    } else {
+        return 0;
+    }
 
 }
 

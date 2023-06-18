@@ -60,6 +60,10 @@ public:
 
     static bool from_nsec(const std::string &nsec, PrivateKey &pk);
     static std::string from_npub(const std::string &npub);
+    static std::string from_bech32(const std::string &bech, std::string_view cat);
+    static std::string to_npub(std::string_view public_key);
+    static std::string to_nsec(const PrivateKey &key);
+    static std::string to_bech32(std::string_view hex, const std::string &type);
 
     ///Create encrypted message
     /**
@@ -68,7 +72,7 @@ public:
      * @param text text
      * @return event
      */
-    std::optional<Event> create_private_message(const PrivateKey &pk, const std::string_view &to_publickey, const std::string_view &text, std::time_t created_at);
+    std::optional<Event> create_private_message(const PrivateKey &pk, const std::string_view &to_publickey, const std::string_view &text, std::time_t created_at, Event &&skelet = Event::KeyPairs());
     ///Decrypt private message
     /**
      * @param pk private key
@@ -78,6 +82,14 @@ public:
     std::optional<std::string> decrypt_private_message(const PrivateKey &pk, const Event &ev);
 
     bool create_shared_secret(const PrivateKey &pk, const std::string_view &to_publickey, SharedSecret &secret);
+
+    ///Create private key and also returns public key
+    /**
+     * @param key reference to variable filled with private key
+     * @return associated public key
+     */
+    std::string create_private_key(PrivateKey &key) const;
+
 
 protected:
     struct Deleter {

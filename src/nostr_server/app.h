@@ -41,6 +41,7 @@ public:
     virtual bool is_home_user(std::string_view pubkey) const override;
     virtual void client_counter(int increment) override;
     virtual void publish(Event &&ev, const void *publisher) override;
+    virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;
 protected:
     coroserver::http::StaticPage static_page;
 

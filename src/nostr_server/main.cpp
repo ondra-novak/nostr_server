@@ -124,6 +124,9 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.metric.enable = metrics["enable"].getBool();
 
     outcfg.botcfg.nsec = relaybot["private_key"].getString();
+    outcfg.botcfg.admin = relaybot["admin_pubkey"].getString();
+    outcfg.botcfg.this_relay_url = relaybot["this_relay_url"].getString();
+    outcfg.botcfg.groups = relaybot["groups"].getString();
 
 
 

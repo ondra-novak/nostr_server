@@ -104,6 +104,9 @@ bool SignatureTools::sign(const PrivateKey &key, Event &event) const {
     std::string pubkey = calculate_keypair(key, kp);
     if (pubkey.empty()) return false;
     event.set("pubkey", pubkey);
+    if (!event["created_at"].contains<std::time_t>()) {
+        event.set("created_at", std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
+    }
     unsigned char sig64[64];
     HashSha256 hash;
     get_hash(event, hash);
@@ -134,27 +137,39 @@ std::string SignatureTools::to_hex(unsigned char *content, std::size_t len) {
     return out;
 }
 
-template<typename Fn>
-static void convert_bits_5_to_8(std::vector<unsigned char> data, Fn fn) {
-    std::uint16_t accum = 0;
+template<int from, int to, typename Iterator,  typename Fn>
+static void convert_bits(Iterator at, Iterator end, Fn fn) {
+    constexpr unsigned int input_mask = ~((~0U) << from);
+    constexpr unsigned int output_mask = ~((~0U) << to);
+    unsigned int  accum = 0;
     int sz = 0;
-    for (unsigned char x: data) {
-        sz+=5;
-        accum  = (accum << 5) | x;
-        if (sz >= 8) {
-            unsigned char b = accum >> (sz - 8);
+    while (at != end) {
+        unsigned int val = (*at) & input_mask;
+        sz+=from;
+        accum = (accum << from) | val;
+        while (sz >= to) {
+            unsigned int b = (accum >> (sz - to)) & output_mask;
             fn(b);
-            sz -= 8;
+            sz -= to;
+        }
+        ++at;
+    }
+    if constexpr(to < from) {
+        if (sz) {
+            accum <<= (to - sz);
+            unsigned int b = accum & output_mask;
+            fn(b);
         }
     }
 }
+
 
 
 bool SignatureTools::from_nsec(const std::string &nsec, PrivateKey &pk) {
     auto r = bech32::decode(nsec);
     if (r.encoding == bech32::Encoding::Invalid) return false;
     if (r.hrp != "nsec") return false;
-    convert_bits_5_to_8(r.dp,[&, pos = 0U](unsigned char c) mutable {
+    convert_bits<5,8>(r.dp.begin(), r.dp.end(),[&, pos = 0U](unsigned char c) mutable {
         if (pos < pk.size()) {
             pk[pos++] = c;
         }
@@ -167,12 +182,52 @@ std::string SignatureTools::from_npub(const std::string &npub) {
     if (r.encoding == bech32::Encoding::Invalid) return {};
     if (r.hrp != "npub") return {};
     PublicKey pk;
-    convert_bits_5_to_8(r.dp,[&, pos = 0U](unsigned char c) mutable {
+    convert_bits<5,8>(r.dp.begin(), r.dp.end(),[&, pos = 0U](unsigned char c) mutable {
         if (pos < pk.size()) {
             pk[pos++] = c;
         }
     });
     return to_hex(pk.data(), pk.size());
+}
+
+std::string SignatureTools::from_bech32(const std::string &bech, std::string_view cat) {
+    auto r = bech32::decode(bech);
+    if (r.encoding == bech32::Encoding::Invalid) return {};
+    if (r.hrp != cat) return {};
+    PublicKey pk;
+    convert_bits<5,8>(r.dp.begin(), r.dp.end(),[&, pos = 0U](unsigned char c) mutable {
+        if (pos < pk.size()) {
+            pk[pos++] = c;
+        }
+    });
+    return to_hex(pk.data(), pk.size());
+
+}
+
+std::string SignatureTools::to_npub(std::string_view public_key) {
+    PublicKey key;
+    hexToBytes(public_key, [&, p = 0U](unsigned char c) mutable {
+        if (p<key.size()) key[p++] = c;
+    });
+    std::vector<unsigned char> datapart;
+    convert_bits<8,5>(key.begin(), key.end(), [&](unsigned char c){datapart.push_back(c);});
+    return bech32::encode("npub", datapart);
+}
+
+std::string SignatureTools::to_bech32(std::string_view hex, const std::string &type) {
+    std::vector<unsigned char> data;
+    hexToBytes(hex, [&](unsigned char c) mutable {
+        data.push_back(c);
+    });
+    std::vector<unsigned char> datapart;
+    convert_bits<8,5>(data.begin(), data.end(), [&](unsigned char c){datapart.push_back(c);});
+    return bech32::encode(type, datapart);
+}
+
+std::string SignatureTools::to_nsec(const PrivateKey &key) {
+    std::vector<unsigned char> datapart;
+    convert_bits<8,5>(key.begin(), key.end(), [&](unsigned char c){datapart.push_back(c);});
+    return bech32::encode("nsec", datapart);
 }
 
 static int copy_shared_pt_x(unsigned char *output,const unsigned char *x32,const unsigned char *,void *) {
@@ -201,7 +256,8 @@ bool SignatureTools::create_shared_secret(const PrivateKey &pk, const std::strin
 }
 
 std::optional<Event> SignatureTools::create_private_message(const PrivateKey &pk,
-                const std::string_view &to_publickey, const std::string_view &text, std::time_t created_at) {
+                const std::string_view &to_publickey, const std::string_view &text,
+                std::time_t created_at, Event &&skelet) {
 
     SharedSecret shared_secret;
     if (!create_shared_secret(pk, to_publickey, shared_secret)) return {};
@@ -237,16 +293,14 @@ std::optional<Event> SignatureTools::create_private_message(const PrivateKey &pk
     coroserver::base64::encode(std::string_view(reinterpret_cast<char *>(iv), sizeof(iv)),
             [&](char c){outmsg.push_back(c);});
 
-    Event out_ev = {
-            {"content",outmsg},
-            {"kind",4},
-            {"created_at", created_at},
-            {"tags",Event::Array {
-                    {"p",std::string(to_publickey)}
-            }}
-    };
-    sign(pk, out_ev);
-    return out_ev;
+    skelet.set("content", outmsg);
+    skelet.set("kind",4);
+    skelet.set("created_at", created_at);
+    auto tags = skelet["tags"].array();
+    tags.push_back({"p",std::string(to_publickey)});
+    skelet.set("tags", tags);
+    sign(pk, skelet);
+    return skelet;
 }
 
 std::optional<std::string> SignatureTools::decrypt_private_message(const PrivateKey &pk, const Event &ev) {
@@ -293,6 +347,18 @@ std::optional<std::string> SignatureTools::decrypt_private_message(const Private
     plaintextLen += len;
 
     return std::string(reinterpret_cast<const char *>(plaintext.data()), plaintextLen);
+}
+
+std::string SignatureTools::create_private_key(PrivateKey &key) const {
+    std::string  out;
+    while (true) {
+        if (RAND_bytes(key.data(), key.size()) != 1) {
+            return {};
+        }
+        out = calculate_pubkey(key);
+        if (!out.empty()) return out;
+    }
+
 }
 
 }

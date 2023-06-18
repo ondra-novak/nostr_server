@@ -176,7 +176,6 @@ void Peer::send_error(std::string_view id, std::string_view text) {
 void Peer::on_event(docdb::Structured &msg) {
     std::string id;
     try {
-        auto &storage = _app->get_storage();
         docdb::Structured event(std::move(msg.at(1)));
         id = event["id"].as<std::string_view>();
         std::string_view pubkey = event["pubkey"].as<std::string_view>();
@@ -233,16 +232,12 @@ void Peer::on_event(docdb::Structured &msg) {
                 }
             }
         }
-        auto to_replace = _app->doc_to_replace(event);
-        if (to_replace != docdb::DocID(-1)) {
-            storage.put(event, to_replace);
-        }
-        _app->get_publisher().publish(EventSource{std::move(event),this});
+        _app->publish(std::move(event), this);
         send({commands[Command::OK], id, true, ""});
         _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
     } catch (const docdb::DuplicateKeyException &e) {
         _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
-        send_error(id, "duplicate:");
+        send({commands[Command::OK], id, true, "duplicate:"});
     } catch (const Blocked &e) {
         send_error(id, std::string("blocked: ") + e.what());
     } catch (const std::invalid_argument &e) {
@@ -279,7 +274,10 @@ void Peer::on_req(const docdb::Structured &msg) {
     bool fnd = _app->find_in_index(_rscalc, flts, std::move(ftlist));
 
     auto filter_docs = [&](auto fn) {
-        _rscalc.documents(storage, [&](docdb::DocID id, const auto &doc){
+        auto s = _rscalc.pop();
+        std::reverse(s.begin(),s.end());
+        for (docdb::DocID id: s) {
+            auto doc = storage.find(id);
             if (doc) {
                 for (const auto &f: flts) {
                     if (f.test(doc->content)) {
@@ -291,7 +289,7 @@ void Peer::on_req(const docdb::Structured &msg) {
                 std::string error = "Document missing: " + std::to_string(id);
                 _req.log_message(error, 10);
             }
-        });
+        }
     };
 
 

@@ -64,6 +64,7 @@ public:
      */
     virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, FTRList &&relevance) const = 0;
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
+    virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
     virtual Event get_server_capabilities() const = 0;
     virtual bool is_home_user(std::string_view pubkey) const = 0;
