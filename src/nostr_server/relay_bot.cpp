@@ -324,16 +324,16 @@ std::string RelayBot::delete_group_post(const SignatureTools::PrivateKey &pk,
     } else {
         flt.ids.push_back(nt);
     }
-    _app->find_in_index(_rccalc, {flt}, {});
-    if (!_rccalc.top().empty()) {
+    _app->find_in_index(_rccalc, {flt});
+    if (!_rccalc.is_top_empty()) {
         auto set = _rccalc.pop();
-        auto doc = _app->get_storage().find(set.back());
+        auto doc = _app->get_storage().find(set.back().id);
         if (doc) {
             std::string id = doc->content["id"].as<std::string>();
             Event ev = create_event(5, "", {{"e", id}});
             _sigtool.sign(pk,ev);
             _app->publish(std::move(ev), this);
-            _app->get_storage().erase(set.back());
+            _app->get_storage().erase(set.back().id);
             return id;
         }
     }

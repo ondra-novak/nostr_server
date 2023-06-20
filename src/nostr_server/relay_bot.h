@@ -34,7 +34,7 @@ protected:
     EventSubscriber _subscriber;
     SignatureTools::PrivateKey _pk;
     SignatureTools _sigtool;
-    docdb::RecordSetCalculator _rccalc;
+    IApp::RecordSetCalculator _rccalc;
     bool _active = false;
 
     enum class ObjectType {

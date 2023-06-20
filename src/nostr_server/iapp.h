@@ -47,8 +47,8 @@ public:
     };
 
 
-    using FulltextRelevance  = std::pair<docdb::DocID, unsigned int>;
-    using FTRList = std::vector<FulltextRelevance>;
+    using OrderingItem = std::pair<unsigned int, unsigned int>;
+    using RecordSetCalculator = docdb::RecordsetStackT<docdb::DocID, OrderingItem>;
 
     using DocIDList = std::vector<docdb::DocID>;
 
@@ -62,7 +62,7 @@ public:
      * @param filter filter
      * @return candidates
      */
-    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, FTRList &&relevance) const = 0;
+    virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const = 0;
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const = 0;
     virtual docdb::PDatabase get_database() const = 0;

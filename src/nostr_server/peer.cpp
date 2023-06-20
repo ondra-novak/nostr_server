@@ -269,66 +269,35 @@ void Peer::on_req(const docdb::Structured &msg) {
     }
 
 
-    IApp::FTRList ftlist;
-    auto &storage = _app->get_storage();
-    bool fnd = _app->find_in_index(_rscalc, flts, std::move(ftlist));
+    _app->find_in_index(_rscalc, flts);
 
-    auto filter_docs = [&](auto fn) {
-        auto s = _rscalc.pop();
-        std::reverse(s.begin(),s.end());
-        for (docdb::DocID id: s) {
-            auto doc = storage.find(id);
+    auto candidates = _rscalc.pop();
+    if (!candidates.is_inverted()) {
+
+        const auto &storage = _app->get_storage();
+
+        std::sort(candidates.begin(), candidates.end(), [&](const auto &a, const auto &b){
+            return a.value > b.value;
+        });
+
+        for (const auto &cd: candidates) {
+            if (!limit) break;
+            auto doc = storage.find(cd.id);
             if (doc) {
+                const Event &ev = doc->content;
                 for (const auto &f: flts) {
-                    if (f.test(doc->content)) {
-                       fn(doc->content);
-                       break;
+                    if (f.test(ev)) {
+                        if (!send({commands[Command::EVENT], subid, ev})) return;
+                        --limit;
+                        break;
                     }
                 }
             } else {
-                std::string error = "Document missing: " + std::to_string(id);
-                _req.log_message(error, 10);
+                _req.log_message("Event missing for ID:"+std::to_string(cd.id), 10);
             }
         }
-    };
 
 
-    if (fnd) {
-        if (!ftlist.empty()) {
-            auto top = _rscalc.pop();
-            std::sort(top.begin(), top.end(), [&](docdb::DocID a, docdb::DocID b){
-               auto it1 = std::lower_bound(ftlist.begin(),ftlist.end(), IApp::FulltextRelevance{a,0});
-               auto it2 = std::lower_bound(ftlist.begin(),ftlist.end(), IApp::FulltextRelevance{b,0});
-               return it1->second < it2->second;
-            });
-            if (limit && limit < top.size()) {
-                top.resize(limit);
-            }
-            _rscalc.push(std::move(top));
-            filter_docs([&](const auto &doc){
-                if (!send({commands[Command::EVENT], subid, &doc})) return;
-            });
-        }else if (limit > 0 && _rscalc.top().size()>limit) {
-            std::vector<Event> events;
-            filter_docs([&](auto &doc){
-                events.push_back(std::move(doc));
-            });
-            std::sort(events.begin(), events.end(), [](const Event &a, const Event &b){
-                return a["created_at"].as<std::time_t>() < b["created_at"].as<std::time_t>();
-            });
-            auto iter = events.begin();
-            if (events.size()>limit) {
-                std::advance(iter, events.size()-limit);
-            }
-            while (iter != events.end()) {
-                if (!send({commands[Command::EVENT], subid, &(*iter)})) return;
-                ++iter;
-            }
-        } else {
-            filter_docs([&](const auto &doc){
-                if (!send({commands[Command::EVENT], subid, &doc})) return;
-            });
-        }
     }
 
     send({commands[Command::EOSE], subid});
@@ -349,11 +318,8 @@ void Peer::on_count(const docdb::Structured &msg) {
        auto filter = IApp::Filter::create(rq[pos]);
        flts.push_back(filter);
     }
-    bool fnd = _app->find_in_index(_rscalc, flts, {});
-    std::intmax_t count = 0;
-    if (fnd) {
-        count = _rscalc.top().size();
-    }
+    _app->find_in_index(_rscalc, flts);
+    std::intmax_t count = _rscalc.top().size();
     send({commands[Command::COUNT], subid, {{"count", count}}});
 }
 
@@ -384,24 +350,22 @@ void Peer::event_deletion(Event &&event) {
     auto &storage = _app->get_storage();
     docdb::Batch b;
     if (!flt.ids.empty()) {
-        bool ok= _app->find_in_index(_rscalc, {flt}, {});
-        if (ok) {
-            _rscalc.documents(_app->get_storage(), [&](docdb::DocID id, const auto &r){
-               if (r)  {
-                   const Event &ev = r->content;
-                   std::string p = ev["pubkey"].as<std::string>();
-                  if (p != pubkey) {
-                      throw std::invalid_argument("pubkey missmatch");
-                  }
-                  if (deleted_something) {
-                      storage.erase(b, id);
-                  } else {
-                      storage.put(b, event, id);
-                  }
-                  deleted_something = true;
-               }
-            });
-        }
+        _app->find_in_index(_rscalc, {flt});
+        _rscalc.list(_app->get_storage(), [&](docdb::DocID id, const auto &v, const auto &r){
+           if (r)  {
+               const Event &ev = r->content;
+               std::string p = ev["pubkey"].as<std::string>();
+              if (p != pubkey) {
+                  throw std::invalid_argument("pubkey missmatch");
+              }
+              if (deleted_something) {
+                  storage.erase(b, id);
+              } else {
+                  storage.put(b, event, id);
+              }
+              deleted_something = true;
+           }
+        });
     }
 
     if (deleted_something) {

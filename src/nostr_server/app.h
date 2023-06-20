@@ -35,7 +35,7 @@ public:
     virtual EventPublisher &get_publisher() override {return event_publish;}
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
-    virtual bool find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, std::vector<FulltextRelevance> &&relevance) const override ;
+    virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const override ;
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual Event get_server_capabilities() const override;
     virtual bool is_home_user(std::string_view pubkey) const override;
@@ -46,7 +46,7 @@ protected:
     coroserver::http::StaticPage static_page;
 
     struct IndexByIdFn {
-        static constexpr int revision = 2;
+        static constexpr int revision = 3;
         template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
     };
     struct IndexByPubkeyHashTimeFn {
@@ -58,6 +58,10 @@ protected:
         template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
     };
     struct IndexKindTimeFn {
+        static constexpr int revision = 1;
+        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+    };
+    struct IndexTimeFn {
         static constexpr int revision = 1;
         template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
     };
@@ -77,6 +81,7 @@ protected:
     using IndexByPubkeyTime = docdb::Indexer<Storage,IndexByPubkeyHashTimeFn,docdb::IndexType::multi>;
     using IndexTagValueHashTime = docdb::Indexer<Storage,IndexTagValueHashTimeFn,docdb::IndexType::multi>;
     using IndexKindTime = docdb::Indexer<Storage,IndexKindTimeFn,docdb::IndexType::multi>;
+    using IndexTime = docdb::Indexer<Storage,IndexTimeFn,docdb::IndexType::multi>;
     using IndexForFulltext = docdb::Indexer<Storage,IndexForFulltextFn,docdb::IndexType::multi>;
 
 
@@ -98,6 +103,7 @@ protected:
     IndexByAuthorKind _index_replaceable;
     IndexTagValueHashTime _index_tag_value_time;
     IndexKindTime _index_kind_time;
+    IndexTime _index_time;
     IndexForFulltext _index_fulltext;
 
 
@@ -105,8 +111,6 @@ protected:
     cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
     cocls::future<bool> send_simple_stats(coroserver::http::ServerRequest &req);
 
-    static void merge_ft(FTRList &out, FTRList &a, FTRList &tmp);
-    static void dedup_ft(FTRList &x);
 
 
 };

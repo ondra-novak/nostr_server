@@ -36,6 +36,7 @@ App::App(const Config &cfg)
         ,_index_replaceable(_storage, "replaceable")
         ,_index_tag_value_time(_storage, "tag_value_time")
         ,_index_kind_time(_storage, "kind_time")
+        ,_index_time(_storage, "time")
         ,_index_fulltext(_storage, "fulltext")
 {
     if (cfg.metric.enable) {
@@ -90,7 +91,7 @@ void App::init_handlers(coroserver::http::Server &server) {
 
 template<typename Emit>
 void App::IndexByIdFn::operator ()(Emit emit, const Event &ev) const {
-    emit(ev["id"].as<std::string_view>());
+    emit(ev["id"].as<std::string_view>(), ev["created_at"].as<std::time_t>());
 }
 
 template<typename Emit>
@@ -146,6 +147,12 @@ void App::IndexKindTimeFn::operator ()(Emit emit, const Event &ev) const {
     std::time_t ct = ev["created_at"].as<std::time_t>();
     unsigned int kind = ev["kind"].as<unsigned int>();
     emit({kind,ct});
+}
+
+template<typename Emit>
+void App::IndexTimeFn::operator ()(Emit emit, const Event &ev) const {
+    std::time_t ct = ev["created_at"].as<std::time_t>();
+    emit({ct});
 }
 
 
@@ -302,156 +309,141 @@ static void append_time(const IApp::Filter &f, docdb::Key &from, docdb::Key &to)
 };
 
 
-void App::merge_ft(FTRList &out, FTRList &a, FTRList &tmp) {
-    std::swap(out, tmp);
-    out.clear();
-    auto iter_a = a.begin();
-    auto iter_t = tmp.begin();
-    auto end_a = a.end();
-    auto end_t = tmp.end();
-    while (iter_a != end_a && iter_t != end_t) {
-        const auto &itm_a = *iter_a;
-        const auto &itm_t = *iter_t;
-        if (itm_a.first < itm_t.first) {
-            out.emplace_back(itm_a.first, itm_a.second+100);
-            ++iter_a;
-        } else if (itm_a.first > itm_t.first) {
-            out.emplace_back(itm_t.first, itm_t.second+100);
-            ++iter_t;
-        } else {
-            out.emplace_back(itm_t.first, itm_t.second+itm_a.second);
-            ++iter_a;
-            ++iter_t;
-        }
-    }
-    while (iter_a != end_a) {
-        const auto &itm_a = *iter_a;
-        out.emplace_back(itm_a.first, itm_a.second+100);
-        ++iter_a;
-    }
-    while (iter_t != end_t) {
-        const auto &itm_t = *iter_t;
-        out.emplace_back(itm_t.first, itm_t.second+100);
-        ++iter_t;
-    }
-
-}
-
 void App::client_counter(int increment)  {
     _clients.fetch_add(increment, std::memory_order_relaxed);
 }
 
-void App::dedup_ft(FTRList &x) {
-    if (x.empty()) return;
-    auto i = x.begin();
-    auto j = i;
-    ++i;
-    auto e = std::remove_if(i,x.end(),[&](const FulltextRelevance &rl) {
-        if (rl.first == j->first) {
-            j->second = std::min(j->second, rl.second);
-            return true;
-        } else {
-            return false;
-        }
-    });
-    x.erase(e, x.end());
+
+static constexpr IApp::OrderingItem unique_key_value_ordering(std::time_t time) {
+    return {0,static_cast<unsigned int>(time-946681200)};
 }
 
-bool App::find_in_index(docdb::RecordSetCalculator &calc, const std::vector<Filter> &filters, FTRList &&relevance) const {
-    calc.clear();
-    relevance.clear();
+
+constexpr auto unique_index_ordering = [](const auto &row) -> IApp::OrderingItem {
+    auto [time] = row.value.value.template get<std::time_t>();
+    return unique_key_value_ordering(time);
+};
+
+template<typename ... Args>
+static constexpr auto multi_index_ordering() {
+    return [](const auto &row) -> IApp::OrderingItem {
+        auto tup = row.key.template get<Args..., std::time_t>();
+        static constexpr auto pos = std::tuple_size_v<decltype(tup)> - 1;
+        return unique_key_value_ordering(std::get<pos>(tup));
+    };
+};
+
+
+auto fulltext_relevance_ordering(std::string_view word) {
+    return [=](const auto &row) -> IApp::OrderingItem {
+        auto [rel] = row.value.template get<unsigned char>();
+        auto [k] = row.key.template get<std::string_view>();
+        rel *= (k.length() - word.length())+1;
+        return {256/rel,0};
+    };
+}
+
+IApp::OrderingItem merge_relevance(const IApp::OrderingItem& a, const IApp::OrderingItem &b) {
+    return {std::max(a.first, b.first),std::max(a.second, b.second)};
+}
+
+
+void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const {
     std::hash<std::string_view> hasher;
-    std::vector<FulltextRelevance> ftr2,ftr3;
+    calc.clear();
 
     docdb::PSnapshot snap = _storage.get_db()->make_snapshot();
 
-    bool b = false;
+    calc.push(calc.empty_set());
     for (const auto &f: filters) {
-        bool r = false;
-        if (!f.ft_search.empty()) {
-            std::vector<WordToken> wt;
-            tokenize_text(f.ft_search, wt);
-            if (!wt.empty()) {
-               for (const WordToken &tk: wt) {
-                   for (const auto &row : _index_fulltext.select(docdb::prefix(tk.first))) {
-                       auto [rel] = row.value.get<unsigned char>();
-                       auto [k] = row.key.get<std::string_view>();
-                       rel *= (k.length() - tk.first.length())+1;
-                       ftr2.push_back({row.id, rel});
-                   }
-                   std::sort(ftr2.begin(), ftr2.end());
-                   dedup_ft(ftr2);
-                   merge_ft(relevance, ftr2, ftr3);
-               }
-               auto s = calc.get_empty_set();
-               std::transform(relevance.begin(), relevance.end(), std::back_inserter(s),[&](const auto &x) {
-                   return x.first;
-               });
-               calc.push(std::move(s));
-               calc.AND(r);
-            }
-        }
-        if (!f.ids.empty()) {
-           auto s = calc.get_empty_set();
-           for (const auto &a: f.ids) {
-               if (a.size() == 64) {
-                   auto row = _index_by_id.find(a);
-                   if (row) s.push_back(row->id);
-               } else {
-                   calc.push(_index_by_id.select(docdb::prefix(a)));
-               }
-           }
-           calc.push(std::move(s));
-           calc.AND(r);
-           if (calc.top_is_empty()) continue;
-        }
-        if (!f.authors.empty()) {
-            bool rr = false;
-            for (const auto &a: f.authors) {
-                std::size_t h = hasher(a);
-                docdb::Key from(h);
-                docdb::Key to(h);
-                append_time(f, from, to);
-                calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to));
-                calc.OR(rr);
-            }
-            calc.AND(r);
-            if (calc.top_is_empty()) continue;
-        }
-        if (!f.tags.empty()) {
-            for (const auto &[tag, values]: f.tags) {
-                bool rr = false;
-                for (const auto &v: values) {
-                    unsigned char t = tag;
-                    std::size_t h = hasher(v);
-                    docdb::Key from(t,h);
-                    docdb::Key to(t,h);
-                    append_time(f,from, to);
-                    calc.push(_index_tag_value_time.select_between(from, to));
-                    calc.OR(rr);
+        calc.push(calc.all_items_set());
+        do {
+            if (!f.ft_search.empty()) {
+                std::vector<WordToken> wt;
+                tokenize_text(f.ft_search, wt);
+                calc.push(calc.empty_set());
+                for (const WordToken &tk: wt) {
+                   calc.push(_index_fulltext.select(docdb::prefix(tk.first)),
+                           fulltext_relevance_ordering(tk.first));
+                   calc.OR(merge_relevance);
                 }
-                calc.AND(r);
-                if (calc.top_is_empty()) break;
+                calc.AND(merge_relevance);
             }
-            if (calc.top_is_empty()) continue;
-        }
-        if (!f.kinds.empty()) {
-            bool rr = false;
-            for (const auto &a: f.kinds) {
-                docdb::Key from(a);
-                docdb::Key to(a);
+            if (calc.is_top_empty()) break;;
+            if (!f.ids.empty()) {
+               calc.push(calc.empty_set());
+               for (const auto &a: f.ids) {
+                   auto s = calc.empty_set();
+                   if (a.size() == 64) {
+                       auto row = _index_by_id.find(a);
+                       if (row) {
+                           auto [time] = row->value.get<std::time_t>();
+                           s.push_back({row->id,unique_key_value_ordering(time)});
+                       }
+                       calc.push(std::move(s));
+                   } else {
+                       calc.push(_index_by_id.get_snapshot(snap).select(docdb::prefix(a)),unique_index_ordering);
+                   }
+                   calc.OR(merge_relevance);
+               }
+               calc.AND(merge_relevance);
+               if (calc.is_top_empty()) break;
+            }
+            if (!f.authors.empty()) {
+                calc.push(calc.empty_set());
+                for (const auto &a: f.authors) {
+                    std::size_t h = hasher(a);
+                    docdb::Key from(h);
+                    docdb::Key to(h);
+                    append_time(f, from, to);
+                    calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to),
+                            multi_index_ordering<std::size_t>());
+                    calc.OR(merge_relevance);
+                }
+                calc.AND(merge_relevance);
+                if (calc.is_top_empty()) break;
+            }
+            if (!f.tags.empty()) {
+                for (const auto &[tag, values]: f.tags) {
+                    for (const auto &v: values) {
+                        calc.push(calc.empty_set());
+                        unsigned char t = tag;
+                        std::size_t h = hasher(v);
+                        docdb::Key from(t,h);
+                        docdb::Key to(t,h);
+                        append_time(f,from, to);
+                        calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
+                                multi_index_ordering<unsigned char, std::size_t>());
+                        calc.OR(merge_relevance);
+                    }
+                    calc.AND(merge_relevance);
+                    if (calc.is_top_empty()) break;
+                }
+                if (calc.is_top_empty()) break;
+            }
+            if (!f.kinds.empty()) {
+                calc.push(calc.empty_set());
+                for (const auto &a: f.kinds) {
+                    docdb::Key from(a);
+                    docdb::Key to(a);
+                    append_time(f, from, to);
+                    calc.push(_index_kind_time.get_snapshot(snap).select_between(from, to),
+                            multi_index_ordering<unsigned int>());
+                    calc.OR(merge_relevance);
+                }
+                calc.AND(merge_relevance);
+            }
+            if (calc.top().is_inverted() && (f.since.has_value() || f.until.has_value())) {
+                docdb::Key from;
+                docdb::Key to;
                 append_time(f, from, to);
-                calc.push(_index_kind_time.select_between(from, to));
-                calc.OR(rr);
+                calc.push(_index_time.get_snapshot(snap).select_between(from, to),
+                        multi_index_ordering<>());
+                calc.OR(merge_relevance);
             }
-            calc.AND(r);
-        }
-        if (r) {
-            calc.OR(b);
-        }
+        } while (false);
+        calc.OR(merge_relevance);
     }
-    return b;
-
 }
 
 
@@ -526,5 +518,6 @@ void App::publish(Event &&event, const void *publisher)  {
     }
     event_publish.publish(EventSource{std::move(event),publisher});
 }
+
 
 } /* namespace nostr_server */
