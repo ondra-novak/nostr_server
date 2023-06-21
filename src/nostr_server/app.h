@@ -84,8 +84,6 @@ protected:
     using IndexTime = docdb::Indexer<Storage,IndexTimeFn,docdb::IndexType::multi>;
     using IndexForFulltext = docdb::Indexer<Storage,IndexForFulltextFn,docdb::IndexType::multi>;
 
-
-
     EventPublisher event_publish;
     docdb::PDatabase _db;
     ServerDescription _server_desc;
@@ -105,6 +103,7 @@ protected:
     IndexKindTime _index_kind_time;
     IndexTime _index_time;
     IndexForFulltext _index_fulltext;
+
 
 
 

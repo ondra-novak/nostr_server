@@ -8,6 +8,7 @@
 #include "relay_bot.h"
 #include "event_tools.h"
 #include <iostream>
+#include <docdb/json.h>
 
 namespace nostr_server {
 
@@ -315,10 +316,10 @@ std::string RelayBot::delete_group_post(const SignatureTools::PrivateKey &pk,
 
     }
     if (nt.empty()) is_moderator = false;
-    IApp::Filter flt;
+    Filter flt;
     flt.kinds.push_back(1);
     flt.authors.push_back(group_pubkey);
-    if (!is_moderator) flt.tags.emplace('p',IApp::StringOptions{sender});
+    if (!is_moderator) flt.tags.emplace_back('p',sender);
     if (nt.empty()) {
         flt.since = std::chrono::system_clock::to_time_t(std::chrono::system_clock::now() - std::chrono::hours(24));
     } else {

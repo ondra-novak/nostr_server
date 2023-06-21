@@ -2,6 +2,7 @@
 #ifndef SRC_NOSTR_SERVER_IAPP_H_
 #define SRC_NOSTR_SERVER_IAPP_H_
 #include "publisher.h"
+#include "filter.h"
 
 #include <docdb/database.h>
 #include <docdb/storage.h>
@@ -27,24 +28,6 @@ public:
     using IndexViewByAuthorKindTag = docdb::IndexView<Storage,TimestampRowDef, docdb::IndexType::unique>;
 
 
-    using StringOptions = std::vector<std::string>;
-    using NumberOptions = std::vector<unsigned int>;
-
-    struct Filter {
-        StringOptions ids;
-        StringOptions authors;
-        NumberOptions kinds;
-        std::map<char,StringOptions> tags;
-        std::optional<std::time_t> since;
-        std::optional<std::time_t> until;
-        std::optional<unsigned int> limit;
-        std::uint64_t tag_mask = 0;
-        std::string ft_search;
-
-        bool test(const docdb::Structured &doc) const;
-        static Filter create(const docdb::Structured &f);
-        static int tag2bit(char tag);
-    };
 
 
     using OrderingItem = std::pair<unsigned int, unsigned int>;

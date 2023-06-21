@@ -6,10 +6,11 @@ add_executable(nostr_server
 	peer.cpp
 	signature.cpp
 	fulltext.cpp
-	rate_limiter.cpp	
+	rate_limiter.cpp
 	telemetry_def.cpp
 	bech32.cpp
 	relay_bot.cpp
+	filter.cpp
 )
 
 target_link_libraries(nostr_server
@@ -17,7 +18,7 @@ target_link_libraries(nostr_server
     telemetry
     ${LEVELDB_LIB}
     ${SECP256K1_LIBRARIES}
-    ${LIBSSL_LIBRARIES}        
+    ${LIBSSL_LIBRARIES}
     ${UNAC_LIBRARIES}
 	${STANDARD_LIBRARIES}
 )

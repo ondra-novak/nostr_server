@@ -9,6 +9,7 @@
 
 #include "telemetry_def.h"
 
+#include "filter.h"
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
 
@@ -22,7 +23,7 @@ public:
 
     static cocls::future<bool> client_main(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &options);
 
-    using Subscriptions = std::vector<std::pair<std::string,std::vector<IApp::Filter> > >;
+    using Subscriptions = std::vector<std::pair<std::string,std::vector<Filter> > >;
 
 
 
@@ -45,7 +46,6 @@ protected:
     RateLimiter _rate_limiter;
     bool _authent = false;
     bool _hello_recv = false;
-    bool _auth_sent = false;
     bool _no_limit = false;
     std::string _auth_pubkey;
     Event _client_capabilities;

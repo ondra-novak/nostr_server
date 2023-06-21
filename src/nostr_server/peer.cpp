@@ -55,6 +55,9 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 
     me._req.log_message("Connected client: "+std::string(ua));
 
+    //auth is always requested, but it is not always checked
+    me.prepare_auth_challenge();
+    me.send({commands[Command::AUTH], me._auth_pubkey});
 
     auto listener = me.listen_publisher();
     try {
@@ -256,10 +259,10 @@ void Peer::on_req(const docdb::Structured &msg) {
 
     const auto &rq = msg.array();
     std::size_t limit = 0;
-    std::vector<IApp::Filter> flts;
+    std::vector<Filter> flts;
     std::string subid = rq[1].as<std::string>();
     for (std::size_t pos = 2; pos < rq.size(); ++pos) {
-        auto filter = IApp::Filter::create(rq[pos]);
+        auto filter = Filter::create(rq[pos]);
         if (filter.limit.has_value()) {
             limit = std::max<std::size_t>(limit, *filter.limit);
         } else {
@@ -312,10 +315,10 @@ void Peer::on_req(const docdb::Structured &msg) {
 
 void Peer::on_count(const docdb::Structured &msg) {
     const auto &rq = msg.array();
-    std::vector<IApp::Filter> flts;
+    std::vector<Filter> flts;
     std::string subid = rq[1].as<std::string>();
     for (std::size_t pos = 2; pos < rq.size(); ++pos) {
-       auto filter = IApp::Filter::create(rq[pos]);
+       auto filter = Filter::create(rq[pos]);
        flts.push_back(filter);
     }
     _app->find_in_index(_rscalc, flts);
@@ -341,7 +344,7 @@ void Peer::event_deletion(Event &&event) {
     bool deleted_something = false;
     auto id = event["id"].as<std::string_view>();
     auto pubkey = event["pubkey"].as<std::string_view>();
-    IApp::Filter flt;
+    Filter flt;
     for (const auto &item: event["tags"].array()) {
         if (item[0].as<std::string_view>() == "e") {
            flt.ids.push_back(item[1].as<std::string>());
@@ -351,7 +354,7 @@ void Peer::event_deletion(Event &&event) {
     docdb::Batch b;
     if (!flt.ids.empty()) {
         _app->find_in_index(_rscalc, {flt});
-        _rscalc.list(_app->get_storage(), [&](docdb::DocID id, const auto &v, const auto &r){
+        _rscalc.list(_app->get_storage(), [&](docdb::DocID id, const auto &, const auto &r){
            if (r)  {
                const Event &ev = r->content;
                std::string p = ev["pubkey"].as<std::string>();
@@ -461,15 +464,8 @@ void Peer::send_notice(std::string_view text) {
 bool Peer::check_for_auth() {
     if (!_options.auth) return true;
     if (!_authent) {
-        if (!_auth_sent) {
-            prepare_auth_challenge();
-            send({commands[Command::AUTH],_auth_pubkey});
-            _auth_sent = true;
-            return false;
-        } else {
-            send_notice("restricted: Authentication is mandatory on this relay");
-            return false;
-        }
+        send_notice("restricted: Authentication is mandatory on this relay");
+        return false;
     }
     return true;
 }

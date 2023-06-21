@@ -111,6 +111,8 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.options.read_only= options["read_only"].getBool(false);
 
     outcfg.private_key = replication["private_key"].getString("replicator_01");
+
+#if 0
     for (const auto &item: replication) {
         std::string_view n = item.first.getView();
         if (n.compare(0,5,"task_") == 0) {
@@ -119,6 +121,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
                     std::string(item.second.getString())});
         }
     }
+#endif
 
     outcfg.metric.auth = metrics["auth"].getString();
     outcfg.metric.enable = metrics["enable"].getBool();

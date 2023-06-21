@@ -29,8 +29,8 @@ struct ServerOptions {
 
 
 struct ReplicationTask {
-    std::string task_name;
     std::string relay_url;
+
 };
 
 struct OpenMetricConf {

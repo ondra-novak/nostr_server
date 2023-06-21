@@ -156,118 +156,7 @@ void App::IndexTimeFn::operator ()(Emit emit, const Event &ev) const {
 }
 
 
-int IApp::Filter::tag2bit(char tag) {
-    return (tag >= '0' && tag <= '9')*(tag -'0'+1)
-         + (tag >= 'A' && tag <= 'Z')*(tag -'A'+11)
-         + (tag >= 'a' && tag <= 'z')*(tag -'a'+37) - 1;
 
-}
-
-bool IApp::Filter::test(const docdb::Structured &doc) const {
-try {
-    if (!authors.empty()) {
-        auto t = doc["pubkey"].as<std::string_view>();
-        if (std::find_if(authors.begin(), authors.end(), [&](const std::string_view &a){
-            return t.compare(0, a.size(), a) == 0;
-        }) == authors.end()) {
-            return false;
-        }
-    }
-    if (!ids.empty()) {
-        if (std::find(ids.begin(), ids.end(), doc["id"].as<std::string_view>()) == ids.end()) {
-            return false;
-        }
-    }
-    if (!kinds.empty()) {
-        if (std::find(kinds.begin(), kinds.end(), doc["kind"].as<unsigned int>()) == kinds.end()) {
-            return false;
-        }
-    }
-    if (!tags.empty()) {
-        std::uint64_t checks = 0;
-        const auto &doc_tags = doc["tags"].array();
-        for (const auto &tag : doc_tags) {
-            if (tag[0].contains<std::string_view>() && tag[1].contains<std::string_view>()) {
-                std::string_view tagstr = tag[0].as<std::string_view>();
-                std::string_view value = tag[1].as<std::string_view>();
-                if (tagstr.size() == 1) {
-                    char t = tagstr[0];
-                    int bit = tag2bit(t);
-                    auto mask = std::uint64_t(1) << bit;
-                    if ((bit>=0) & ((checks & mask) == 0)) {
-                        auto cond = tags.find(t);
-                        if (cond == tags.end()) {
-                            checks|=mask;
-                        } else {
-                            auto iter = std::find(cond->second.begin(), cond->second.end(), value);
-                            if (iter != cond ->second.end()) checks |= mask;
-                        }
-                    }
-                }
-            }
-        }
-        if ((checks & tag_mask) != tag_mask) return false;
-    }
-    if (since.has_value()) {
-        if (doc["created_at"].as<std::time_t>() < *since) return false;
-    }
-    if (until.has_value()) {
-        if (doc["created_at"].as<std::time_t>() > *until) return false;
-    }
-    return true;
-} catch (...) {
-    return false;
-}
-
-}
-
-
-IApp::Filter IApp::Filter::create(const docdb::Structured &f) {
-    Filter out;
-    const auto &kv = f.keypairs();
-    for (const auto &[k, v]: kv) {
-        if (k == "authors") {
-            const auto &a = v.array();
-            for (const auto &c: a)  {
-                out.authors.push_back(c.as<std::string>());
-            }
-        } else if (k == "ids") {
-            const auto &a = v.array();
-            for (const auto &c: a)  {
-                out.ids.push_back(c.as<std::string>());
-            }
-        } else if (k == "kinds") {
-            const auto &a = v.array();
-            for (const auto &c: a)  {
-                out.kinds.push_back(c.as<unsigned int>());
-            }
-        } else if (k.substr(0,1) == "#") {
-            auto t = k.substr(1);
-            if (t.size() == 1) {
-                char n = t[0];
-                int bit = tag2bit(n);
-                if (bit >= 0) {
-                    const auto &a = v.array();
-                    StringOptions opts;
-                    for (const auto &c: a)  {
-                        opts.push_back(c.as<std::string>());
-                    }
-                    out.tags.emplace(n, std::move(opts));
-                    out.tag_mask |= std::uint64_t(1) << bit;
-                }
-            }
-        } else if (k == "since") {
-            out.since = v.as<std::time_t>();
-        } else if (k == "until") {
-            out.until = v.as<std::time_t>();
-        } else if (k == "limit") {
-            out.limit = v.as<unsigned int>();
-        } else if (k == "search") {
-            out.ft_search = v.as<std::string_view>();
-        }
-    }
-    return out;
-}
 
 docdb::DocID App::doc_to_replace(const Event &event) const {
     IndexByAuthorKindFn idx;
@@ -294,7 +183,7 @@ docdb::DocID App::find_replacable(std::string_view pubkey, unsigned int kind, st
 
 }
 
-static void append_time(const IApp::Filter &f, docdb::Key &from, docdb::Key &to) {
+static void append_time(const Filter &f, docdb::Key &from, docdb::Key &to) {
     if (f.since.has_value()) {
         from.append(*f.since);
     } else {
@@ -404,17 +293,22 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                 if (calc.is_top_empty()) break;
             }
             if (!f.tags.empty()) {
-                for (const auto &[tag, values]: f.tags) {
-                    for (const auto &v: values) {
-                        calc.push(calc.empty_set());
-                        unsigned char t = tag;
-                        std::size_t h = hasher(v);
+                auto iter = f.tags_begin();
+                auto end = f.tags_end();
+                while (iter != end) {
+                    calc.push(calc.empty_set());
+                    auto tend = f.tags_next(iter);
+                    while (iter != tend) {
+                        char t = iter->first;
+                        std::string_view val = iter->second;
+                        std::size_t h = hasher(val);
                         docdb::Key from(t,h);
                         docdb::Key to(t,h);
                         append_time(f,from, to);
                         calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
                                 multi_index_ordering<unsigned char, std::size_t>());
                         calc.OR(merge_relevance);
+                        ++iter;
                     }
                     calc.AND(merge_relevance);
                     if (calc.is_top_empty()) break;
