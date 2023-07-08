@@ -119,7 +119,7 @@ namespace {
             c = static_cast<unsigned char>(d);
         }
     }
-
+#if 0
     // using the charset of valid chars, map the incoming data
     std::string mapToCharset(std::vector<unsigned char> &data) {
         std::string ret;
@@ -131,7 +131,7 @@ namespace {
         }
         return ret;
     }
-
+#endif
     // "expand" the HRP -- adapted from example in BIP-0173
     //
     // To expand the chars of the HRP means to create a new collection of

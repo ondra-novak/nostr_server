@@ -11,18 +11,20 @@
 #include <coroserver/ssl_common.h>
 #include <coroserver/websocket_stream.h>
 
+#include "signature.h"
 namespace nostr_server {
 
 class ReplicationService {
 public:
-    ReplicationService(PApp app, ReplicationConfig &&cfg);
 
-    cocls::future<void> start(coroserver::ContextIO ctx);
+    static cocls::future<void> start(coroserver::ContextIO ctx, PApp app, ReplicationConfig &&cfg);
 
 
 
 
 protected:
+
+    ReplicationService(PApp app, ReplicationConfig &&cfg);
 
     using Index = docdb::Map<docdb::RowDocument>;
 
@@ -30,10 +32,18 @@ protected:
     ReplicationConfig _cfg;
     Index _index;
     coroserver::ssl::Context _sslctx;
+    SignatureTools::PrivateKey _pk;
 
-    cocls::future<void> start_replication_task(coroserver::ContextIO ctx, std::string name, std::string relay);
-    cocls::future<void> run_replication(std::string name, coroserver::ws::Stream &&stream);
-    static cocls::suspend_point<bool> send(coroserver::ws::Stream &stream, const docdb::Structured &msgdata);
+    using TasksFutures = std::vector<std::unique_ptr<cocls::future<void > > >;
+
+    cocls::future<void> start_outbound_task(coroserver::ContextIO ctx, const ReplicationTask &cfg);
+    cocls::future<void> run_outbound(const ReplicationTask &cfg, coroserver::ws::Stream stream);
+    cocls::future<void> run_outbound_recv(const ReplicationTask &cfg, coroserver::ws::Stream stream);
+
+    TasksFutures init_tasks(coroserver::ContextIO ctx);
+
+
+
 };
 
 

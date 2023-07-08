@@ -18,7 +18,7 @@ cocls::async<void> RelayBot::run_bot(IApp * app, RelayBotConfig cfg) {
     bool b = co_await bot._subscriber.next();
     while (b) {
         const auto &item = bot._subscriber.value();
-        const Event &ev = item.first;
+        const Event &ev = item.event;
         unsigned int kind = ev["kind"].as<unsigned int>();
         std::string_view object = bot.find_object_pubkey(ev);
         if (!object.empty()) {
@@ -104,7 +104,7 @@ void RelayBot::send_response(const SignatureTools::PrivateKey &pk, std::string_v
     auto now =  std::chrono::system_clock::to_time_t(std::chrono::system_clock::now());
     auto ev = _sigtool.create_private_message(pk, target, response, now, std::move(skelet));
     if (ev.has_value()) {
-        _app->publish(std::move(*ev), this);
+        _app->publish(std::move(*ev), {});
     }
 }
 
@@ -136,8 +136,8 @@ void RelayBot::process_relaybot_command(std::string_view command, std::string_vi
 
             _sigtool.sign(key, kind10002);
             _sigtool.sign(key, kind30000);
-            _app->publish(std::move(kind10002), this);
-            _app->publish(std::move(kind30000), this);
+            _app->publish(std::move(kind10002), {});
+            _app->publish(std::move(kind30000), {});
             Event::Array mention{"p",s};
             Event::Array tags(1,mention);
             _object_map.put(s,{ObjectType::group, key});
@@ -247,7 +247,7 @@ void RelayBot::process_group_command(const SignatureTools::PrivateKey &pk,
             send_response(pk, sender, "Posted #[0].\n\nType /delete to delete your last post from the group", {
                     {"tags",{docdb::undefined,{"e",post["id"]}}}
             });
-            _app->publish(std::move(post), this);
+            _app->publish(std::move(post), {});
 
         }
     } catch (std::exception &e) {
@@ -275,7 +275,7 @@ void RelayBot::change_profile(const SignatureTools::PrivateKey &pk, std::string 
     profile.set(key, value);
     Event newev = create_event(0, profile.to_json(), {});
     _sigtool.sign(pk, newev);
-    _app->publish(std::move(newev), this);
+    _app->publish(std::move(newev), {});
 
 }
 
@@ -302,7 +302,7 @@ void RelayBot::mod_userlist(const SignatureTools::PrivateKey &pk, std::string pu
     Event newev = create_event(kind, "", {{"d", cat}});
     newev.set("tags", tags);
     _sigtool.sign(pk, ev);
-    _app->publish(std::move(ev), this);
+    _app->publish(std::move(ev), {});
 }
 
 std::string RelayBot::delete_group_post(const SignatureTools::PrivateKey &pk,
@@ -333,7 +333,7 @@ std::string RelayBot::delete_group_post(const SignatureTools::PrivateKey &pk,
             std::string id = doc->content["id"].as<std::string>();
             Event ev = create_event(5, "", {{"e", id}});
             _sigtool.sign(pk,ev);
-            _app->publish(std::move(ev), this);
+            _app->publish(std::move(ev), {});
             _app->get_storage().erase(set.back().id);
             return id;
         }

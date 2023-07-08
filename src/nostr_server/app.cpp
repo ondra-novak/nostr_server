@@ -405,13 +405,18 @@ bool App::is_home_user(std::string_view pubkey) const {
     return fnd;
 }
 
-void App::publish(Event &&event, const void *publisher)  {
+void App::publish(Event &&event, std::string source)  {
     auto to_replace = doc_to_replace(event);
     if (to_replace != docdb::DocID(-1)) {
         _storage.put(event, to_replace);
     }
-    event_publish.publish(EventSource{std::move(event),publisher});
+    event_publish.publish(EventSource{std::move(event),std::move(source)});
 }
 
+docdb::DocID App::find_by_id(std::string_view id) const {
+    auto result = _index_by_id.find(id);
+    if (result) return result->id;
+    else return 0;
+}
 
 } /* namespace nostr_server */

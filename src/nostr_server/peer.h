@@ -8,6 +8,7 @@
 #include "rate_limiter.h"
 
 #include "telemetry_def.h"
+#include "commands.h"
 
 #include "filter.h"
 #include <coroserver/websocket_stream.h>
@@ -49,6 +50,7 @@ protected:
     bool _no_limit = false;
     std::string _auth_pubkey;
     Event _client_capabilities;
+    std::string _source_ident;
 
 
     Subscriptions _subscriptions;
@@ -58,7 +60,7 @@ protected:
 
     void processMessage(std::string_view msg_text);
 
-    cocls::suspend_point<bool> send(const docdb::Structured &msgdata);
+    cocls::suspend_point<bool> send(Command command, std::initializer_list<docdb::Structured> args);
 
     telemetry::UniqueSensor<ClientSensor> _sensor;
     telemetry::SharedSensor<SharedStats> _shared_sensor;

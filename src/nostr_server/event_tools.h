@@ -38,7 +38,7 @@ const Event::Array *find_tag_if(const Event &event, Fn fn) {
 }
 
 
-Event create_event(unsigned int kind, std::string_view content, std::initializer_list<std::initializer_list<std::string_view> > tags) {
+inline Event create_event(unsigned int kind, std::string_view content, std::initializer_list<std::initializer_list<std::string_view> > tags) {
     Event::Array t;
     std::transform(tags.begin(), tags.end(), std::back_inserter(t), [&](const auto &tag) {
         Event::Array taginfo;

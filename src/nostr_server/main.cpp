@@ -12,6 +12,7 @@
 #include <coroserver/io_context.h>
 #include <coroserver/signal.h>
 #include <leveldb/cache.h>
+#include <docdb/json.h>
 
 #include <csignal>
 #include <iostream>
@@ -110,18 +111,44 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.options.replicators = options["replicators"].getString();
     outcfg.options.read_only= options["read_only"].getBool(false);
 
-    outcfg.private_key = replication["private_key"].getString("replicator_01");
 
-#if 0
-    for (const auto &item: replication) {
-        std::string_view n = item.first.getView();
-        if (n.compare(0,5,"task_") == 0) {
-            outcfg.replication_config.push_back(nostr_server::ReplicationTask{
-                    std::string(n.substr(5)),
-                    std::string(item.second.getString())});
+    outcfg.replication_config.private_key = replication["private_key"].getString();
+    outcfg.replication_config.this_relay_url = replication["this_relay_url"].getString();
+
+    for (const auto &kv : replication) {
+        nostr_server::ReplicationTask task;
+
+        if (kv.first.getView().compare(0,4,"out:") == 0) {
+            task.relay_url = std::string(kv.first.getView().substr(4));
+            task.inbound = false;
+        } else if (kv.first.getView().compare(0,3,"in:") == 0) {
+            task.relay_url = std::string(kv.first.getView().substr(3));
+            task.inbound = true;
+        } else {
+            continue;
         }
+        if (task.relay_url.compare(0,5,"ws://") != 0 && task.relay_url.compare(0,6,"wss://") != 0) {
+            throw std::invalid_argument("Replication - relay url is invalid");
+        }
+        if (!kv.second.getBool()) {
+           std::string fltfile = kv.second.getPath();
+           std::ifstream fltf(fltfile, std::ios::in);
+           if (!fltf) throw std::runtime_error("Failed to open filter file: " + fltfile);
+           std::istream_iterator<char> iter(fltf);
+           std::istream_iterator<char> end;
+           auto json = docdb::Structured::from_json(iter, end);
+           if (json.contains<docdb::Structured::Array>()) {
+               const auto &a = json.array();
+               for (const auto &x: a) {
+                   task.filters.push_back(nostr_server::Filter::create(x));
+               }
+           } else {
+               task.filters.push_back(nostr_server::Filter::create(json));
+           }
+        }
+
+        outcfg.replication_config.tasks.push_back(std::move(task));
     }
-#endif
 
     outcfg.metric.auth = metrics["auth"].getString();
     outcfg.metric.enable = metrics["enable"].getBool();

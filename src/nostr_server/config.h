@@ -6,6 +6,7 @@
 #include <optional>
 #include <coroserver/ssl_common.h>
 
+#include "filter.h"
 namespace nostr_server {
 
 struct ServerDescription {
@@ -29,7 +30,9 @@ struct ServerOptions {
 
 
 struct ReplicationTask {
+    bool inbound;
     std::string relay_url;
+    std::vector<Filter> filters;
 
 };
 
@@ -39,14 +42,18 @@ struct OpenMetricConf {
 };
 
 
-using ReplicationConfig = std::vector<ReplicationTask>;
+struct ReplicationConfig {
+    std::string private_key;
+    std::string this_relay_url;
+    std::vector<ReplicationTask> tasks;
+};
 
 
 struct RelayBotConfig {
     std::string nsec;
     std::string admin;
-    std::string this_relay_url;
     std::string groups;
+    std::string this_relay_url;
 
 };
 
@@ -56,6 +63,8 @@ struct Config {
     int threads;
     std::string web_document_root;
     std::string database_path;
+    std::string this_relay_url;
+
 
     std::optional<coroserver::ssl::Certificate> cert;
     std::string ssl_listen_addr;

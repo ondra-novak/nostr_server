@@ -52,7 +52,8 @@ public:
     virtual Event get_server_capabilities() const = 0;
     virtual bool is_home_user(std::string_view pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
-    virtual void publish(Event &&ev, const void *publisher) = 0;
+    virtual void publish(Event &&ev, std::string source) = 0;
+    virtual docdb::DocID find_by_id(std::string_view id) const = 0;
 
 };
 

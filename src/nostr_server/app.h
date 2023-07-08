@@ -36,11 +36,12 @@ public:
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
     virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const override ;
+    virtual docdb::DocID find_by_id(std::string_view id) const override;
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual Event get_server_capabilities() const override;
     virtual bool is_home_user(std::string_view pubkey) const override;
     virtual void client_counter(int increment) override;
-    virtual void publish(Event &&ev, const void *publisher) override;
+    virtual void publish(Event &&ev, std::string source) override;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;
 protected:
     coroserver::http::StaticPage static_page;

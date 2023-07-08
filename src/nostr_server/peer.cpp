@@ -1,6 +1,5 @@
 #include <coroserver/http_ws_server.h>
 #include <coroserver/http_stringtables.h>
-#include <coroserver/static_lookup.h>
 #include <docdb/json.h>
 
 #include "peer.h"
@@ -25,21 +24,6 @@ Peer::~Peer() {
     _app->client_counter(-1);
 }
 
-NAMED_ENUM(Command,
-        unknown,
-        REQ,
-        EVENT,
-        CLOSE,
-        COUNT,
-        EOSE,
-        NOTICE,
-        AUTH,
-        OK,
-        HELLO,
-        WELCOME
-);
-constexpr NamedEnum_Command commands={};
-
 
 using namespace coroserver::ws;
 
@@ -57,7 +41,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 
     //auth is always requested, but it is not always checked
     me.prepare_auth_challenge();
-    me.send({commands[Command::AUTH], me._auth_pubkey});
+    me.send(Command::AUTH, {me._auth_pubkey});
 
     auto listener = me.listen_publisher();
     try {
@@ -98,8 +82,8 @@ cocls::future<void> Peer::listen_publisher() {
     bool nx = co_await _subscriber.next();
     while (nx) {
         const EventSource &v = _subscriber.value();
-        filter_event(v.first, [&](const std::string_view &s){
-            send({commands[Command::EVENT], s, &v.first});
+        filter_event(v.event, [&](const std::string_view &s){
+            send(Command::EVENT, {s, &v.event});
         });
         nx = co_await _subscriber.next();
     }
@@ -152,14 +136,15 @@ void Peer::processMessage(std::string_view msg_text) {
     }
 }
 
-cocls::suspend_point<bool> Peer::send(const docdb::Structured &msgdata) {
-    std::string json = msgdata.to_json(docdb::Structured::flagUTF8);
-    _req.log_message([&](auto emit){
-        std::string msg = "Send: ";
-        msg.append(json);
-        emit(msg);
-    }, 0);
-    return _stream.write({json});
+cocls::suspend_point<bool> Peer::send(Command command, std::initializer_list<docdb::Structured> args) {
+    return ::nostr_server::send(_stream, command, args, [this](std::string_view text){
+        _req.log_message([&](auto emit){
+            docdb::Buffer<char, 270> line;
+            line.append("Send:");
+            line.append(text);
+            emit(line);
+        });
+    });
 }
 
 class Blocked: public std::runtime_error {
@@ -169,7 +154,7 @@ public:
 
 
 void Peer::send_error(std::string_view id, std::string_view text) {
-    send({commands[Command::OK], id, false, text});
+    send(Command::OK, {id, false, text});
     _sensor.update([&](ClientSensor &szn){
         szn.error_counter++;
     });
@@ -201,7 +186,7 @@ void Peer::on_event(docdb::Structured &msg) {
         }
         auto kind = event["kind"].as<unsigned int>();
         if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
-            _app->get_publisher().publish(EventSource{std::move(event),this});
+            _app->get_publisher().publish(EventSource{std::move(event),{}});
             _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
             return;
         }
@@ -235,12 +220,12 @@ void Peer::on_event(docdb::Structured &msg) {
                 }
             }
         }
-        _app->publish(std::move(event), this);
-        send({commands[Command::OK], id, true, ""});
+        _app->publish(std::move(event), _source_ident);
+        send(Command::OK, {id, true, ""});
         _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
     } catch (const docdb::DuplicateKeyException &e) {
         _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
-        send({commands[Command::OK], id, true, "duplicate:"});
+        send(Command::OK, {id, true, "duplicate:"});
     } catch (const Blocked &e) {
         send_error(id, std::string("blocked: ") + e.what());
     } catch (const std::invalid_argument &e) {
@@ -290,7 +275,7 @@ void Peer::on_req(const docdb::Structured &msg) {
                 const Event &ev = doc->content;
                 for (const auto &f: flts) {
                     if (f.test(ev)) {
-                        if (!send({commands[Command::EVENT], subid, ev})) return;
+                        if (!send(Command::EVENT, {subid, ev})) return;
                         --limit;
                         break;
                     }
@@ -303,7 +288,7 @@ void Peer::on_req(const docdb::Structured &msg) {
 
     }
 
-    send({commands[Command::EOSE], subid});
+    send(Command::EOSE, {subid});
 
     _subscriptions.emplace_back(subid, std::move(flts));
     _sensor.update([&](ClientSensor &szn){
@@ -323,7 +308,7 @@ void Peer::on_count(const docdb::Structured &msg) {
     }
     _app->find_in_index(_rscalc, flts);
     std::intmax_t count = _rscalc.top().size();
-    send({commands[Command::COUNT], subid, {{"count", count}}});
+    send(Command::COUNT, {subid, {{"count", count}}});
 }
 
 void Peer::on_close(const docdb::Structured &msg) {
@@ -373,9 +358,9 @@ void Peer::event_deletion(Event &&event) {
 
     if (deleted_something) {
         storage.get_db()->commit_batch(b);
-        _app->get_publisher().publish(EventSource{std::move(event),this});
+        _app->get_publisher().publish(EventSource{std::move(event),{}});
     }
-    send({commands[Command::OK], id, true, ""});
+    send(Command::OK, {id, true, ""});
     _sensor.update([&](ClientSensor &szn){szn.report_kind(5);});
 }
 
@@ -435,6 +420,9 @@ void Peer::process_auth(const Event &event) {
         }
         _authent = true;
         _auth_pubkey = event["pubkey"].as<std::string>();
+        if (event["my_url"].contains<std::string>()) {
+            _source_ident =event["my_url"].as<std::string>();
+        }
 
         if (_options.replicators.find(_auth_pubkey) != _options.replicators.npos) {
             _no_limit = true;
@@ -443,7 +431,7 @@ void Peer::process_auth(const Event &event) {
         if (_hello_recv) {
             send_welcome();
         } else {
-            send({commands[Command::OK], id, true, "Welcome on relay!"});
+            send(Command::OK,{ id, true, "Welcome on relay!"});
         }
     } catch (const std::exception &e) {
         send_error(id,std::string("restricted:") + e.what());
@@ -455,7 +443,7 @@ void Peer::process_auth(const Event &event) {
 }
 
 void Peer::send_notice(std::string_view text) {
-    send({commands[Command::NOTICE],text});
+    send(Command::NOTICE,{text});
     _sensor.update([&](ClientSensor &szn){
         szn.error_counter++;
     });
@@ -471,7 +459,7 @@ bool Peer::check_for_auth() {
 }
 
 void Peer::send_welcome() {
-    send({commands[Command::WELCOME], _app->get_server_capabilities()});
+    send(Command::WELCOME,{ _app->get_server_capabilities()});
 }
 
 }
