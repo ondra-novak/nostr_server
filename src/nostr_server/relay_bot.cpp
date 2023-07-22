@@ -169,7 +169,7 @@ std::vector<std::string> RelayBot::get_user_list(std::string_view pubkey, unsign
     if (docid) {
         auto evinfo = _app->get_storage().find(docid);
         if (evinfo) {
-            const Event &ev = evinfo->content;
+            const Event &ev = evinfo->document;
             for (const auto &item : ev["tags"].array()) {
                 if (item[0].as<std::string_view>() == "p") {
                     out.push_back(std::string(item[1].as<std::string_view>()));
@@ -264,7 +264,7 @@ void RelayBot::change_profile(const SignatureTools::PrivateKey &pk, std::string 
     auto docinfo = _app->get_storage().find(_app->find_replacable(pubkey, 0, ""));
     Event ev ((Event::KeyPairs()));
     if (docinfo) {
-        ev = docinfo->content;
+        ev = docinfo->document;
     }
     Event profile ((Event::KeyPairs()));
     try {
@@ -287,7 +287,7 @@ void RelayBot::mod_userlist(const SignatureTools::PrivateKey &pk, std::string pu
     auto docinfo = _app->get_storage().find(_app->find_replacable(pubkey, kind, cat));
     Event ev ((Event::KeyPairs()));
     if (docinfo) {
-        ev = docinfo->content;
+        ev = docinfo->document;
     }
     auto tags = ev["tags"].array();
     auto iter = std::find_if(tags.begin(), tags.end(), [&](const Event &t){
@@ -330,7 +330,7 @@ std::string RelayBot::delete_group_post(const SignatureTools::PrivateKey &pk,
         auto set = _rccalc.pop();
         auto doc = _app->get_storage().find(set.back().id);
         if (doc) {
-            std::string id = doc->content["id"].as<std::string>();
+            std::string id = doc->document["id"].as<std::string>();
             Event ev = create_event(5, "", {{"e", id}});
             _sigtool.sign(pk,ev);
             _app->publish(std::move(ev), {});

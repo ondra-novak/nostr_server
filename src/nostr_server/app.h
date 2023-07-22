@@ -35,7 +35,7 @@ public:
     virtual EventPublisher &get_publisher() override {return event_publish;}
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
-    virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const override ;
+    virtual void find_in_index(RecordsetCalculator &calc, const std::vector<Filter> &filters) const override ;
     virtual docdb::DocID find_by_id(std::string_view id) const override;
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual Event get_server_capabilities() const override;

@@ -272,7 +272,7 @@ void Peer::on_req(const docdb::Structured &msg) {
             if (!limit) break;
             auto doc = storage.find(cd.id);
             if (doc) {
-                const Event &ev = doc->content;
+                const Event &ev = doc->document;
                 for (const auto &f: flts) {
                     if (f.test(ev)) {
                         if (!send(Command::EVENT, {subid, ev})) return;
@@ -341,7 +341,7 @@ void Peer::event_deletion(Event &&event) {
         _app->find_in_index(_rscalc, {flt});
         _rscalc.list(_app->get_storage(), [&](docdb::DocID id, const auto &, const auto &r){
            if (r)  {
-               const Event &ev = r->content;
+               const Event &ev = r->document;
                std::string p = ev["pubkey"].as<std::string>();
               if (p != pubkey) {
                   throw std::invalid_argument("pubkey missmatch");

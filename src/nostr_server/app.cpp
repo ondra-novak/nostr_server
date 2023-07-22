@@ -39,6 +39,7 @@ App::App(const Config &cfg)
         ,_index_time(_storage, "time")
         ,_index_fulltext(_storage, "fulltext")
 {
+    _storage.restore_backup(Storage(_db, "events_restore_backup"));
     if (cfg.metric.enable) {
         register_scavengers(*_omcoll);
         _omcoll->make_active();
@@ -209,7 +210,7 @@ static constexpr IApp::OrderingItem unique_key_value_ordering(std::time_t time) 
 
 
 constexpr auto unique_index_ordering = [](const auto &row) -> IApp::OrderingItem {
-    auto [time] = row.value.value.template get<std::time_t>();
+    auto [time] = row.value.template get<std::time_t>();
     return unique_key_value_ordering(time);
 };
 
@@ -237,7 +238,7 @@ IApp::OrderingItem merge_relevance(const IApp::OrderingItem& a, const IApp::Orde
 }
 
 
-void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const {
+void App::find_in_index(RecordsetCalculator &calc, const std::vector<Filter> &filters) const {
     std::hash<std::string_view> hasher;
     calc.clear();
 

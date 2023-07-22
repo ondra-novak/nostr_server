@@ -126,7 +126,7 @@ cocls::future<void> ReplicationService::run_outbound_recv(const ReplicationTask 
                             err_ids.emplace(did);
                             auto docinfo = _app->get_storage().find(did);
                             if (docinfo) {
-                                bool b = co_await send(stream, Command::EVENT, {docinfo->content}, [](auto){});
+                                bool b = co_await send(stream, Command::EVENT, {docinfo->document}, [](auto){});
                                 if (!b) co_return;
                             }
                         }
@@ -156,7 +156,7 @@ cocls::future<void> ReplicationService::run_outbound(const ReplicationTask &cfg,
     try {
         for (const auto &row : _app->get_storage().select_from(id)) {
             if (row.has_value) {
-                bool b = co_await send(stream, Command::EVENT, {row.content}, [](auto){});
+                bool b = co_await send(stream, Command::EVENT, {row.document}, [](auto){});
                 if (!b) throw std::runtime_error("SYNC: Connection reset");
                 co_await stream.wait_for_flush();
             }

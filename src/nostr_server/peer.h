@@ -41,7 +41,7 @@ protected:
     const ServerOptions & _options;
     EventSubscriber _subscriber;
     coroserver::ws::Stream _stream;
-    IApp::RecordSetCalculator _rscalc;
+    IApp::RecordsetCalculator _rscalc;
     mutable std::mutex _mx;
     std::optional<SignatureTools> _secp;
     RateLimiter _rate_limiter;
