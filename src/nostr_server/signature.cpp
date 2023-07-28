@@ -74,6 +74,20 @@ bool SignatureTools::verify(const Event &event) const {
 
 }
 
+bool SignatureTools::verify(const HashSha256 &id, const PublicKey &pubkey, const Signature &sig) const {
+    secp256k1_xonly_pubkey pubkey_parsed;
+    if (!secp256k1_xonly_pubkey_parse(ctx.get(), &pubkey_parsed, pubkey.data())) return false;
+    return secp256k1_schnorrsig_verify(
+                ctx.get(),
+                sig.data(),
+                id.data(),
+#ifdef SECP256K1_SCHNORRSIG_EXTRAPARAMS_INIT // old versions of libsecp256k1 didn't take a msg size param, this define added just after
+                id.size(),
+#endif
+                &pubkey_parsed
+    );
+}
+
 #if 0
 void SignatureTools::sign(Event &event) const {
     HashSha256 hash;
@@ -116,6 +130,15 @@ bool SignatureTools::sign(const PrivateKey &key, Event &event) const {
         return true;
     }
     return false;
+}
+
+bool SignatureTools::sign(const PrivateKey &key, const HashSha256 &id, Signature &sig, PublicKey &pub) const {
+    secp256k1_keypair kp;
+    if (!secp256k1_keypair_create(ctx.get(), &kp, key.data())) return false;
+    secp256k1_xonly_pubkey xpub;
+    if (!secp256k1_keypair_xonly_pub(ctx.get(), &xpub, nullptr, &kp)) return false;
+    if (!secp256k1_xonly_pubkey_serialize(ctx.get(), pub.data(), &xpub)) return false;
+    return secp256k1_schnorrsig_sign(ctx.get(), sig.data(), id.data(), &kp, nullptr);
 }
 
 std::string SignatureTools::calculate_pubkey(const PrivateKey &key) const {

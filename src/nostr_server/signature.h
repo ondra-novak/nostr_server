@@ -10,6 +10,7 @@
 #include "publisher.h"
 
 
+
 #include <secp256k1.h>
 #include <secp256k1_extrakeys.h>
 
@@ -24,10 +25,12 @@ public:
     using SharedSecret = std::array<unsigned char, 32>;
     using PrivateKey = std::array<unsigned char, 32>;
     using PublicKey = std::array<unsigned char, 32>;
+    using Signature = std::array<unsigned char, 64>;
 
     SignatureTools();
 
     bool verify(const Event &event) const;
+    bool verify(const HashSha256 &id, const PublicKey &pubkey, const Signature &sig) const ;
     ///sign event
     /** Function also fills correct pubkey in the event
      *
@@ -38,6 +41,7 @@ public:
      */
 
     bool sign(const PrivateKey &key, Event &event) const;
+    bool sign(const PrivateKey &key, const HashSha256 &id, Signature &sig, PublicKey &pub) const;
     void get_hash(const Event &event, HashSha256 &hash) const;
 
     ///Calculate pubkey from private key

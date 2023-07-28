@@ -11,6 +11,7 @@ add_executable(nostr_server
 	bech32.cpp
 	relay_bot.cpp
 	filter.cpp
+	event.cpp
 )
 
 target_link_libraries(nostr_server
