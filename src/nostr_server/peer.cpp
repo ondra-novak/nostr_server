@@ -348,7 +348,7 @@ void Peer::event_deletion(const Event &event) {
     auto evtodel = event.get_tag_content("e");
     Event::ID id;
     binary_from_hex(evtodel.begin(), evtodel.end(), id);
-    flts[0].ids.push_back(id);
+    flts[0].ids.push_back({id, id.size()});
     auto &storage = _app->get_storage();
     docdb::Batch b;
     _app->find_in_index(_rscalc, flts);

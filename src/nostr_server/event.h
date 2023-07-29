@@ -124,7 +124,8 @@ struct EventDocument {
         }
         load_bin(at, end, ev.id);
         load_bin(at, end, ev.author);
-        load_bin(at, end, ev.sig);        
+        load_bin(at, end, ev.sig);    
+        assert(ev.calc_id() == ev.id);    
         return ev;
      }
 
@@ -187,6 +188,7 @@ Iter binary_from_hex(Iter beg, Iter end, std::array<unsigned char, sz> &out){
             if (y > 0xF) break;
             out[ofs] = (x << 4) | y;
             ++ofs;
+            ++beg;
         }
     }
     return beg;
@@ -204,6 +206,7 @@ OutIter binary_to_hex(InIter beg, InIter end, OutIter out) {
         ++out;
         *out = b;
         ++out;
+        ++beg;
     }
     return out;
 }

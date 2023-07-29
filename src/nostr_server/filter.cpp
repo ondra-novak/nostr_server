@@ -11,11 +11,23 @@
 
 namespace nostr_server {
 
+template<typename V>
+auto cmp_shorten(const V &v) {
+    return [&](const auto &x) {
+        unsigned int count = x.second;
+        const auto chk = x.first;
+        auto chk_beg = chk.begin();
+        auto chk_end = chk_beg;
+        std::advance(chk_end, count);
+        return std::equal(chk_beg, chk_end, v.begin());
+    };
+}
+
 
 bool Filter::test(const Event &doc) const {
 try {
-    if (!authors.empty() && std::find(authors.begin(), authors.end(), doc.author) == authors.end()) return false;
-    if (!ids.empty() && std::find(ids.begin(), ids.end(), doc.id) == ids.end()) return false;
+    if (!authors.empty() && std::find_if(authors.begin(), authors.end(), cmp_shorten(doc.author)) == authors.end()) return false;
+    if (!ids.empty() && std::find_if(ids.begin(), ids.end(), cmp_shorten(doc.id)) == ids.end()) return false;
     if (!kinds.empty() && std::find(kinds.begin(), kinds.end(), doc.kind) == kinds.end()) return false;
     if (!tags.empty()) {
         std::uint64_t checks = 0;
@@ -54,7 +66,7 @@ Filter Filter::create(const JSON &f) {
                 Event::Pubkey pk;
                 auto hx = c.as<std::string_view>();
                 binary_from_hex(hx.begin(), hx.end(), pk);
-                out.authors.push_back(std::move(pk));
+                out.authors.push_back({pk,std::min<unsigned char>(pk.size(),hx.size()/2)});
             }
         } else if (k == "ids") {
             const auto &a = v.array();
@@ -62,7 +74,7 @@ Filter Filter::create(const JSON &f) {
                 Event::ID id;
                 auto hx = c.as<std::string_view>();
                 binary_from_hex(hx.begin(), hx.end(), id);
-                out.ids.push_back(std::move(id));
+                out.ids.push_back({id,std::min<unsigned char>(id.size(),hx.size()/2)});
             }
         } else if (k == "kinds") {
             const auto &a = v.array();

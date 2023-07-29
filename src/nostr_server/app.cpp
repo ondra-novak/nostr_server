@@ -120,7 +120,7 @@ void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const Event &ev) const
     for (const auto &t: ev.tags) {
         if (t.tag.size() == 1) {
             std::size_t h = hasher(t.content);
-            emit({t.tag,h, ev.created_at});
+            emit({t.tag[0],h, ev.created_at});
         }
     }
 }
@@ -186,7 +186,7 @@ static constexpr IApp::OrderingItem unique_key_value_ordering(std::time_t time) 
 
 
 constexpr auto unique_index_ordering = [](const auto &row) -> IApp::OrderingItem {
-    auto [time] = row.value.value.template get<std::time_t>();
+    auto [time] = row.value.template get<std::time_t>();
     return unique_key_value_ordering(time);
 };
 
@@ -206,13 +206,23 @@ auto fulltext_relevance_ordering(std::string_view word) {
         auto [k] = row.key.template get<std::string_view>();
         rel *= (k.length() - word.length())+1;
         return {256/rel,0};
-    };
+    };  
 }
 
 IApp::OrderingItem merge_relevance(const IApp::OrderingItem& a, const IApp::OrderingItem &b) {
     return {std::max(a.first, b.first),std::max(a.second, b.second)};
 }
 
+template<typename Index, typename Def>
+static auto searchShortenID(const Index &idx, const Def &def) {
+    auto from = def.first;
+    auto to = def.first;
+    for (unsigned int i = def.second; i < def.first.size(); ++i) {
+        from[i] = 0;
+        to[i] = 0xFF;
+    }
+    return idx.select_between(from,to);
+}
 
 void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const {
     std::hash<std::string_view> hasher;
@@ -222,6 +232,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
 
     calc.push(calc.empty_set());
     for (const auto &f: filters) {
+        bool need_time = true;
         calc.push(calc.all_items_set());
         do {
             if (!f.ft_search.empty()) {
@@ -239,14 +250,20 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
             if (!f.ids.empty()) {
                calc.push(calc.empty_set());
                for (const auto &a: f.ids) {
-                   auto s = calc.empty_set();
-                    auto row = _index_by_id.find(a);
-                    if (row) {
-                        auto [time] = row->value.get<std::time_t>();
-                        s.push_back({row->id,unique_key_value_ordering(time)});
-                    }
-                    calc.push(std::move(s));
-                    calc.OR(merge_relevance);
+                   if (a.second != a.first.size()) {
+                        calc.push(searchShortenID(_index_by_id.get_snapshot(snap), a),
+                            unique_index_ordering);
+                        calc.OR(merge_relevance);
+                   } else {
+                        auto s = calc.empty_set();
+                        auto row = _index_by_id.find(a.first);
+                        if (row) {
+                            auto [time] = row->value.get<std::time_t>();
+                            s.push_back({row->id,unique_key_value_ordering(time)});
+                        }
+                        calc.push(std::move(s));
+                        calc.OR(merge_relevance);
+                   }
                }
                calc.AND(merge_relevance);
                if (calc.is_top_empty()) break;
@@ -254,12 +271,19 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
             if (!f.authors.empty()) {
                 calc.push(calc.empty_set());
                 for (const auto &a: f.authors) {
-                    docdb::Key from(a);
-                    docdb::Key to(a);
-                    append_time(f, from, to);
-                    calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to),
-                            multi_index_ordering<std::size_t>());
-                    calc.OR(merge_relevance);
+                    if (a.second != a.first.size()) {
+                        calc.push(searchShortenID(_index_pubkey_time.get_snapshot(snap), a),
+                            multi_index_ordering<Event::Pubkey>());
+                        calc.OR(merge_relevance);
+                    } else {
+                        docdb::Key from(a.first);
+                        docdb::Key to(a.first);
+                        append_time(f, from, to);
+                        need_time = false;
+                        calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to),
+                                multi_index_ordering<std::size_t>());
+                        calc.OR(merge_relevance);
+                    }
                 }
                 calc.AND(merge_relevance);
                 if (calc.is_top_empty()) break;
@@ -277,6 +301,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                         docdb::Key from(t,h);
                         docdb::Key to(t,h);
                         append_time(f,from, to);
+                        need_time = false;
                         calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
                                 multi_index_ordering<unsigned char, std::size_t>());
                         calc.OR(merge_relevance);
@@ -293,19 +318,20 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                     docdb::Key from(a);
                     docdb::Key to(a);
                     append_time(f, from, to);
+                    need_time = false;
                     calc.push(_index_kind_time.get_snapshot(snap).select_between(from, to),
                             multi_index_ordering<unsigned int>());
                     calc.OR(merge_relevance);
                 }
                 calc.AND(merge_relevance);
             }
-            if (calc.top().is_inverted() && (f.since.has_value() || f.until.has_value())) {
+            if (need_time && (f.since.has_value() || f.until.has_value())) {
                 docdb::Key from;
                 docdb::Key to;
                 append_time(f, from, to);
                 calc.push(_index_time.get_snapshot(snap).select_between(from, to),
                         multi_index_ordering<>());
-                calc.OR(merge_relevance);
+                calc.AND(merge_relevance);
             }
         } while (false);
         calc.OR(merge_relevance);
@@ -344,6 +370,7 @@ JSON App::get_server_capabilities() const {
     if (_server_options.auth) {
         limitation.set("auth_required", true);
     }
+    limitation.set("min_prefix",32);
     JSON doc = {
         {"name", _server_desc.name},
         {"description", std::string_view(_server_desc.desc)},

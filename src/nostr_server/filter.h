@@ -22,8 +22,12 @@ using PubkeyOptions = std::vector<std::string>;
 using NumberOptions = std::vector<unsigned int>;
 
 struct Filter {
-    std::vector<Event::ID> ids;
-    std::vector<Event::Pubkey> authors;
+    using ShortenID = std::pair<Event::ID, unsigned char>;
+    using ShortenPubkey = std::pair<Event::Pubkey, unsigned char>;
+
+
+    std::vector<ShortenID> ids;
+    std::vector<ShortenPubkey> authors;
     std::vector<Event::Kind> kinds;
     std::vector<std::pair<char,std::string>  > tags;
     std::optional<std::time_t> since;

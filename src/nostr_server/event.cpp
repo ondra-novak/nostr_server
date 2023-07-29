@@ -54,7 +54,7 @@ Event Event::fromStructured(const docdb::Structured &sevent) {
         evtag.tag.append(s_tagid.as<std::string_view>());
         evtag.content.append(s_value.as<std::string_view>());
         for (std::size_t i = 2; i < row.size(); ++i) {
-            evtag.additional_content.push_back(row[1].as<std::string>());
+            evtag.additional_content.push_back(row[i].as<std::string>());
         }
         ev.tags.push_back(std::move(evtag));
     }
@@ -99,7 +99,7 @@ docdb::Structured Event::toStructured() const
         {"created_at", created_at}
     };
     ev.set("tags", build_tags(*this));
-    return ev.to_json();
+    return ev;
 }
 
 Event::ID Event::calc_id() const

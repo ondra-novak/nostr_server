@@ -54,7 +54,7 @@ protected:
         template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
     };
     struct IndexTagValueHashTimeFn {
-        static constexpr int revision = 1;
+        static constexpr int revision = 2;
         template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
     };
     struct IndexKindTimeFn {
