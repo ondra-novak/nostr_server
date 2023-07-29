@@ -163,7 +163,7 @@ int main(int argc, char **argv) {
         auto app = std::make_shared<nostr_server::App>(cfg);
         app->init_handlers(server);
 
-        nostr_server::RelayBot::run_bot(app.get(),cfg.botcfg).detach();
+//        nostr_server::RelayBot::run_bot(app.get(),cfg.botcfg).detach();
 
         auto task = server.start(std::move(listener),coroserver::http::DefaultLogger([](std::string_view line){
             std::cout << line << std::endl;

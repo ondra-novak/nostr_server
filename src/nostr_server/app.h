@@ -38,7 +38,7 @@ public:
     virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const override ;
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual JSON get_server_capabilities() const override;
-    virtual bool is_home_user(std::string_view pubkey) const override;
+    virtual bool is_home_user(const Event::Pubkey &pubkey) const override;
     virtual void client_counter(int increment) override;
     virtual void publish(Event &&ev, const void *publisher) override;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;

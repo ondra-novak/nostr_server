@@ -79,7 +79,10 @@ docdb::Structured::Array build_tags(const Event &ev) {
     return tags_arr;
 }
 
-std::string Event::toJSON() const
+std::string Event::toJSON() const {
+    return toStructured().to_json();
+}
+docdb::Structured Event::toStructured() const 
 {
     IDHex id_str;
     SignatureHex sig_str;
@@ -89,9 +92,9 @@ std::string Event::toJSON() const
     binary_to_hex(author, pubkey_str.begin());
     docdb::Structured ev = {
         {"content", std::string_view(content)},
-        {"id", std::string_view(id_str.data(), id_str.size())},
-        {"pubkey", std::string_view(pubkey_str.data(),pubkey_str.size())},
-        {"sig", std::string_view(sig_str.data(), sig_str.size())},
+        {"id", std::string(id_str.data(), id_str.size())},
+        {"pubkey", std::string(pubkey_str.data(),pubkey_str.size())},
+        {"sig", std::string(sig_str.data(), sig_str.size())},
         {"kind", kind},
         {"created_at", created_at}
     };

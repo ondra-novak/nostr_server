@@ -47,8 +47,9 @@ protected:
     bool _authent = false;
     bool _hello_recv = false;
     bool _no_limit = false;
-    std::string _auth_pubkey;
-    Event _client_capabilities;
+    Event::Pubkey _auth_pubkey;
+    std::string _auth_nonce;
+    JSON _client_capabilities;
 
 
     Subscriptions _subscriptions;
@@ -69,14 +70,14 @@ protected:
     void on_count(const JSON &msg);
     void on_close(const JSON &msg);
 
-    void event_deletion(Event &&event);
+    void event_deletion(const Event &event);
 
     template<typename Fn>
     void filter_event(const Event &doc, Fn fn) const;
 
     bool check_pow(std::string_view id) const;
     void prepare_auth_challenge();
-    void process_auth(const Event &msg);
+    void process_auth(const JSON &jmsg);
     bool check_for_auth();
     void send_welcome();
 

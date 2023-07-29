@@ -48,6 +48,7 @@ struct Event {
     static Event fromJSON(std::string_view json_text);
     static Event fromStructured(const docdb::Structured &json);
     std::string toJSON() const;
+    docdb::Structured toStructured() const;
     ID calc_id() const;
     bool verify(const SignatureTools &sigtool) const;
     bool sign(const SignatureTools &sigtool, const PrivateKey &privkey);
@@ -92,6 +93,7 @@ struct EventDocument {
         std::copy(ev.id.begin(), ev.id.end(), out);
         std::copy(ev.author.begin(), ev.author.end(), out);
         std::copy(ev.sig.begin(), ev.sig.end(), out);
+        return out;
     }
     template<typename Iter>
     static Event from_binary(Iter &at, Iter end) {
@@ -123,6 +125,7 @@ struct EventDocument {
         load_bin(at, end, ev.id);
         load_bin(at, end, ev.author);
         load_bin(at, end, ev.sig);        
+        return ev;
      }
 
     template<typename Iter>

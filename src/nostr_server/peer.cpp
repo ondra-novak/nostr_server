@@ -57,7 +57,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 
     //auth is always requested, but it is not always checked
     me.prepare_auth_challenge();
-    me.send({commands[Command::AUTH], me._auth_pubkey});
+    me.send({commands[Command::AUTH], me._auth_nonce});
 
     auto listener = me.listen_publisher();
     try {
@@ -98,8 +98,9 @@ cocls::future<void> Peer::listen_publisher() {
     bool nx = co_await _subscriber.next();
     while (nx) {
         const EventSource &v = _subscriber.value();
-        filter_event(v.first, [&](const std::string_view &s){
-            send({commands[Command::EVENT], s, &v.first});
+        filter_event(v.first, [&](std::string_view s){
+            JSON doc = v.first.toStructured();
+            send({commands[Command::EVENT], s, &doc});
         });
         nx = co_await _subscriber.next();
     }
@@ -196,7 +197,7 @@ void Peer::on_event(const JSON &msg) {
         if (!_secp.has_value()) {
             _secp.emplace();
         }
-        if (!_secp->verify(event)) {
+        if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
         const auto &kind = event.kind;
@@ -205,31 +206,30 @@ void Peer::on_event(const JSON &msg) {
             _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
             return;
         }
-        if (!_no_limit && _options.read_only && _options.replicators.find(pubkey) == _options.replicators.npos) {
+        if (!_no_limit && _options.read_only /*&& _options.replicators.find(pubkey) == _options.replicators.npos*/) {
             throw Blocked("Sorry, server is in read_only mode");
         }
         if (kind == 5) {
-            event_deletion(std::move(event));
+            event_deletion(event);
             return;
         }
         if (!_no_limit && !_options.foreign_relaying && _options.auth) {
-            if (pubkey != _auth_pubkey) {
+            if (event.author != _auth_pubkey) {
                 throw Blocked("Relaying foreign events is not allowed here");
             }
         }
         if (!_no_limit && _options.block_strangers) {
-            bool unblock = _app->is_home_user(pubkey);
+            bool unblock = _app->is_home_user(event.author);
             if (!unblock) {
-                const Event::Array &tags = event["tags"].array();
-                for (const auto &t : tags) {
-                    std::string_view tname = t[0].as<std::string_view>();
-                    if (tname == "p") {
-                        unblock = _app->is_home_user(t[1].as<std::string_view>());
-                    } else if (tname == "delegation") {
-                        unblock = _app->is_home_user(t[1].as<std::string_view>());
+                auto unblock_pk = [&](const Event::Tag &t){
+                    if (!unblock) {
+                        Event::Pubkey pk;
+                        binary_from_hex(t.content.begin(), t.content.end(), pk);
+                        unblock = _app->is_home_user(pk);
                     }
-                    if (unblock) break;
-                }
+                };
+                event.for_each_tag("p",unblock_pk);
+                event.for_each_tag("delegation",unblock_pk);
                 if (!unblock) {
                     throw Blocked("This place is not for strangers");
                 }
@@ -238,6 +238,8 @@ void Peer::on_event(const JSON &msg) {
         _app->publish(std::move(event), this);
         send({commands[Command::OK], id, true, ""});
         _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
+    } catch (const EventParseException &e) {
+        send_error(id, std::string("invalid: ")+e.what());
     } catch (const docdb::DuplicateKeyException &e) {
         _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
         send({commands[Command::OK], id, true, "duplicate:"});
@@ -287,10 +289,10 @@ void Peer::on_req(const docdb::Structured &msg) {
             if (!limit) break;
             auto doc = storage.find(cd.id);
             if (doc) {
-                const Event &ev = doc->content;
+                const Event &ev = doc->document;
                 for (const auto &f: flts) {
                     if (f.test(ev)) {
-                        if (!send({commands[Command::EVENT], subid, ev})) return;
+                        if (!send({commands[Command::EVENT], subid, ev.toStructured()})) return;
                         --limit;
                         break;
                     }
@@ -340,42 +342,34 @@ void Peer::on_close(const docdb::Structured &msg) {
     });
 }
 
-void Peer::event_deletion(Event &&event) {
+void Peer::event_deletion(const Event &event) {
     bool deleted_something = false;
-    auto id = event["id"].as<std::string_view>();
-    auto pubkey = event["pubkey"].as<std::string_view>();
-    Filter flt;
-    for (const auto &item: event["tags"].array()) {
-        if (item[0].as<std::string_view>() == "e") {
-           flt.ids.push_back(item[1].as<std::string>());
-        }
-    }
+    std::vector<Filter> flts(1);
+    auto evtodel = event.get_tag_content("e");
+    Event::ID id;
+    binary_from_hex(evtodel.begin(), evtodel.end(), id);
+    flts[0].ids.push_back(id);
     auto &storage = _app->get_storage();
     docdb::Batch b;
-    if (!flt.ids.empty()) {
-        _app->find_in_index(_rscalc, {flt});
-        _rscalc.list(_app->get_storage(), [&](docdb::DocID id, const auto &, const auto &r){
-           if (r)  {
-               const Event &ev = r->content;
-               std::string p = ev["pubkey"].as<std::string>();
-              if (p != pubkey) {
-                  throw std::invalid_argument("pubkey missmatch");
-              }
+    _app->find_in_index(_rscalc, flts);
+    for(const auto &row: _rscalc.top()) {
+        auto fdoc = storage.find(row.id);
+        if (fdoc) {
+            if (fdoc->document.author != event.author) {
+                throw std::invalid_argument("pubkey missmatch");
+            }
               if (deleted_something) {
-                  storage.erase(b, id);
+                  storage.erase(b, row.id);
               } else {
-                  storage.put(b, event, id);
+                  storage.put(b, event, row.id);
               }
-              deleted_something = true;
-           }
-        });
+        }
     }
-
     if (deleted_something) {
         storage.get_db()->commit_batch(b);
-        _app->get_publisher().publish(EventSource{std::move(event),this});
+        _app->get_publisher().publish(EventSource{event,this});
     }
-    send({commands[Command::OK], id, true, ""});
+    send({commands[Command::OK], binary_to_hexstr(event.id), true, ""});
     _sensor.update([&](ClientSensor &szn){szn.report_kind(5);});
 }
 
@@ -399,47 +393,45 @@ bool Peer::check_pow(std::string_view id) const {
 }
 
 void Peer::prepare_auth_challenge() {
-    _auth_pubkey.clear();
+    _auth_nonce.clear();
     std::random_device rdev;
     std::default_random_engine rnd(rdev());
     std::uniform_int_distribution<int> rnum(33,126);
     for (int i = 0; i<15; i++) {
-        _auth_pubkey.push_back(rnum(rnd));
+        _auth_nonce.push_back(rnum(rnd));
     }
 }
 
-void Peer::process_auth(const Event &event) {
-    auto id = event["id"].as<std::string_view>();
+void Peer::process_auth(const JSON &jevent) {
+    auto id = jevent["id"].as<std::string_view>();
     try {
+        Event event = Event::fromStructured(jevent);
         auto now = std::chrono::system_clock::now();
         if (!_secp.has_value()) {
             _secp.emplace();
         }
-        if (!_secp->verify(event)) {
+        if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
-        auto kind = event["kind"].as<unsigned int>();
+        auto kind = event.kind;
         if (kind != 22242) {
             throw std::invalid_argument("Unsupported kind");
         }
-        auto created_at = std::chrono::system_clock::from_time_t(event["created_at"].as<std::time_t>());
+        auto created_at = std::chrono::system_clock::from_time_t(event.created_at);
         if (std::chrono::duration_cast<std::chrono::minutes>(now - created_at).count() > 10) {
             throw std::invalid_argument("Challenge expired");
         }
-        auto tags = event["tags"].array();
-        auto chiter = std::find_if(tags.begin(), tags.end(), [&](const Event &x) {
-           return x[0].as<std::string_view>() == "challenge";
-        });
-        if (chiter == tags.end() || (*chiter)[1].as<std::string_view>() != _auth_pubkey) {
+        std::string challenge = event.get_tag_content("challenge");
+        if (challenge != _auth_nonce) {
             throw std::invalid_argument("Invalid challenge");
         }
         _authent = true;
-        _auth_pubkey = event["pubkey"].as<std::string>();
-
+        _auth_pubkey = event.author;
+/*
         if (_options.replicators.find(_auth_pubkey) != _options.replicators.npos) {
             _no_limit = true;
         }
-
+*/
         if (_hello_recv) {
             send_welcome();
         } else {

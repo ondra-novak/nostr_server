@@ -43,7 +43,7 @@ public:
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
     virtual JSON get_server_capabilities() const = 0;
-    virtual bool is_home_user(std::string_view pubkey) const = 0;
+    virtual bool is_home_user(const Event::Pubkey & pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
 

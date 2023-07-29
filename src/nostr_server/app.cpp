@@ -240,17 +240,13 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                calc.push(calc.empty_set());
                for (const auto &a: f.ids) {
                    auto s = calc.empty_set();
-                   if (a.size() == 64) {
-                       auto row = _index_by_id.find(a);
-                       if (row) {
-                           auto [time] = row->value.get<std::time_t>();
-                           s.push_back({row->id,unique_key_value_ordering(time)});
-                       }
-                       calc.push(std::move(s));
-                   } else {
-                       calc.push(_index_by_id.get_snapshot(snap).select(docdb::prefix(a)),unique_index_ordering);
-                   }
-                   calc.OR(merge_relevance);
+                    auto row = _index_by_id.find(a);
+                    if (row) {
+                        auto [time] = row->value.get<std::time_t>();
+                        s.push_back({row->id,unique_key_value_ordering(time)});
+                    }
+                    calc.push(std::move(s));
+                    calc.OR(merge_relevance);
                }
                calc.AND(merge_relevance);
                if (calc.is_top_empty()) break;
@@ -258,9 +254,8 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
             if (!f.authors.empty()) {
                 calc.push(calc.empty_set());
                 for (const auto &a: f.authors) {
-                    std::size_t h = hasher(a);
-                    docdb::Key from(h);
-                    docdb::Key to(h);
+                    docdb::Key from(a);
+                    docdb::Key to(a);
                     append_time(f, from, to);
                     calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to),
                             multi_index_ordering<std::size_t>());
@@ -376,7 +371,7 @@ cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req)
 
 }
 
-bool App::is_home_user(std::string_view pubkey) const {
+bool App::is_home_user(const Event::Pubkey &pubkey) const {
     auto fnd = _index_replaceable.find({pubkey, static_cast<unsigned int>(0),std::string_view()});
     return fnd;
 }
