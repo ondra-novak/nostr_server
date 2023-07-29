@@ -15,7 +15,7 @@
 
 namespace nostr_server {
 
-const Event App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
+const docdb::Structured App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
 //to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
@@ -91,72 +91,49 @@ void App::init_handlers(coroserver::http::Server &server) {
 
 template<typename Emit>
 void App::IndexByIdFn::operator ()(Emit emit, const Event &ev) const {
-    emit(ev["id"].as<std::string_view>(), ev["created_at"].as<std::time_t>());
+    emit(ev.id,ev.created_at);
+//    emit(ev["id"].as<std::string_view>(), ev["created_at"].as<std::time_t>());
 }
 
 template<typename Emit>
 void App::IndexByAuthorKindFn::operator()(Emit emit, const Event &ev) const {
-    auto kind = ev["kind"].as<unsigned int>();
     std::string tag;
-    bool replacable_1 = (kind == 0) | (kind == 3) | ((kind >= 10000) & (kind < 20000));
-    bool replacable_2 = (kind >= 30000) & (kind < 40000);
+    bool replacable_1 = (ev.kind == 0) | (ev.kind == 3) | ((ev.kind >= 10000) & (ev.kind < 20000));
+    bool replacable_2 = (ev.kind >= 30000) & (ev.kind < 40000);
     bool replacable = replacable_1 | replacable_2;
     if  (replacable_2) {
-        auto tags = ev["tags"];
-        auto a = tags.array();
-        auto iter = std::find_if(a.begin(), a.end(), [](const docdb::Structured &x){
-            return x[0].contains<std::string_view>() && x[0].as<std::string_view>() == "d";
-        });
-        if (iter != a.end()) {
-            const auto &d = *iter;
-            tag = d[1].to_string();
-        }
+        tag = ev.get_tag_content("d");
     }
     if (replacable) {
-        auto pubkey = ev["pubkey"].as<std::string_view>();
-        auto created_at = ev["created_at"].as<std::time_t>();
-        emit(AuthorKindTagKey(pubkey, kind, tag), TimestampRowDef::Type(created_at));
+        emit(AuthorKindTagKey(ev.author, ev.kind, tag), ev.created_at);
     }
 }
 
 template<typename Emit>
 void App::IndexByPubkeyHashTimeFn::operator ()(Emit emit, const Event &ev) const {
-    std::hash<std::string_view> hasher;
-    std::size_t h = hasher(ev["pubkey"].as<std::string_view>());
-    std::time_t t = ev["created_at"].as<std::time_t>();
-    emit({h,t});
+    emit({ev.author, ev.created_at});
 }
 
 template<typename Emit>
 void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const Event &ev) const {
     std::hash<std::string_view> hasher;
-    std::time_t ct = ev["created_at"].as<std::time_t>();
-    const auto &tags = ev["tags"].array();
-    for (const auto &tag: tags) {
-        std::string_view t = tag[0].as<std::string_view>();
-        std::string_view v = tag[1].as<std::string_view>();
-        if (t.size() == 1) {
-            std::size_t h = hasher(v);
-            emit({static_cast<unsigned char>(t[0]), h, ct});
+    for (const auto &t: ev.tags) {
+        if (t.tag.size() == 1) {
+            std::size_t h = hasher(t.content);
+            emit({t.tag,h, ev.created_at});
         }
     }
 }
 
 template<typename Emit>
 void App::IndexKindTimeFn::operator ()(Emit emit, const Event &ev) const {
-    std::time_t ct = ev["created_at"].as<std::time_t>();
-    unsigned int kind = ev["kind"].as<unsigned int>();
-    emit({kind,ct});
+    emit({ev.kind,ev.created_at});
 }
 
 template<typename Emit>
 void App::IndexTimeFn::operator ()(Emit emit, const Event &ev) const {
-    std::time_t ct = ev["created_at"].as<std::time_t>();
-    emit({ct});
+    emit(ev.created_at);
 }
-
-
-
 
 docdb::DocID App::doc_to_replace(const Event &event) const {
     IndexByAuthorKindFn idx;
@@ -343,7 +320,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
 
 
 cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
-    Event doc = App::get_server_capabilities();
+    JSON doc = App::get_server_capabilities();
     req.add_header(coroserver::http::strtable::hdr_content_type, "application/nostr+json");
     std::string json = doc.to_json();
     return req.send(std::move(json));
@@ -353,10 +330,9 @@ cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
 
 template<typename Emit>
 inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) const {
-    unsigned int kind = ev["kind"].as<unsigned int>();
-    if (kind == 0 || kind == 1 || kind == 2 || kind == 30023) {
+    if (ev.kind == 0 || ev.kind == 1 || ev.kind == 2 || ev.kind == 30023) {
         std::vector<WordToken> tokens;
-        tokenize_text(ev["content"].as<std::string_view>(), tokens);
+        tokenize_text(ev.content, tokens);
         for (const auto &x: tokens) {
             if (x.first.size()>1) {
                 emit(x.first, x.second);
@@ -365,22 +341,22 @@ inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) con
     }
 }
 
-Event App::get_server_capabilities() const {
-    Event limitation = Event::KeyPairs();
+JSON App::get_server_capabilities() const {
+    JSON limitation = JSON::KeyPairs();
     if (_server_options.pow) {
         limitation.set("min_pow_difficulty", _server_options.pow);
     }
     if (_server_options.auth) {
         limitation.set("auth_required", true);
     }
-    Event doc {
+    JSON doc = {
         {"name", _server_desc.name},
-        {"description", _server_desc.desc},
-        {"contact", _server_desc.contact},
-        {"pubkey", _server_desc.pubkey},
+        {"description", std::string_view(_server_desc.desc)},
+        {"contact", std::string_view(_server_desc.contact)},
+        {"pubkey", std::string_view(_server_desc.pubkey)},
         {"supported_nips", &supported_nips},
-        {"software", software_url},
-        {"version", software_version},
+        {"software", std::string_view(software_url)},
+        {"version", std::string_view(software_version)},
         {"limitation", limitation}
     };
     return doc;
@@ -389,7 +365,7 @@ Event App::get_server_capabilities() const {
 cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req) {
     std::string out;
     _db->get_level_db().GetProperty("leveldb.approximate-memory-usage", &out);
-    Event ev = {
+    JSON ev = {
             {"active_connections",_clients.load(std::memory_order_relaxed)},
             {"stored_events", static_cast<std::intmax_t>(_storage.get_rev())},
             {"database_size", static_cast<std::intmax_t>(_db->get_index_size(docdb::RawKey(0), docdb::RawKey(0xFF)))},

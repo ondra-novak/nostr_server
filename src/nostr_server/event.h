@@ -33,9 +33,10 @@ struct Event {
     using PubkeyHex = std::array<char, 64>;
     using Signature = std::array<unsigned char, 64>; 
     using SignatureHex = std::array<char, 128>; 
+    using Kind = unsigned int;
 
 
-    unsigned int kind = 0;
+    Kind kind = 0;
     std::string content;
     std::vector<Tag> tags;
     std::time_t created_at = 0;
@@ -45,10 +46,29 @@ struct Event {
     Signature sig;
 
     static Event fromJSON(std::string_view json_text);
+    static Event fromStructured(const docdb::Structured &json);
     std::string toJSON() const;
     ID calc_id() const;
     bool verify(const SignatureTools &sigtool) const;
     bool sign(const SignatureTools &sigtool, const PrivateKey &privkey);
+    std::string get_tag_content(std::string_view tag) const {
+        auto t = get_tag(tag);
+        return t?t->content:std::string();
+    }
+    const Tag *get_tag(std::string_view tag) const {
+        const Tag *r = nullptr;
+        for (const Tag &t: tags) if (t.tag == tag) r = &t;
+        return r;
+    }
+    Tag *get_tag(std::string_view tag) {
+        Tag *r = nullptr;
+        for (Tag &t: tags) if (t.tag == tag) r = &t;
+        return r;
+    }
+    template<typename Fn>
+    void for_each_tag(const std::string_view tag, Fn fn) const {
+        for (const Tag &t: tags) if (t.tag == tag) fn(t);
+    }
 };
 
 struct EventDocument {
@@ -189,6 +209,15 @@ template<typename OutIter, std::size_t sz>
 OutIter binary_to_hex(const std::array<unsigned char, sz> &in, OutIter out) {
     return binary_to_hex(in.begin(), in.end(), out);
 }
+
+template<std::size_t sz>
+std::string binary_to_hexstr(const std::array<unsigned char, sz> &in) {
+    std::string out(sz*2,' ');
+    binary_to_hex(in, out.begin());
+    return out;   
+}
+
+
 
 }
 

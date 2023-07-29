@@ -26,54 +26,6 @@ void SignatureTools::Deleter::operator ()(secp256k1_context *ptr) const {
     secp256k1_context_destroy(ptr);
 }
 
-void SignatureTools::get_hash(const Event &event, HashSha256 &hash) const {
-    Event eventToSign = {0,
-            &event["pubkey"],
-            &event["created_at"],
-            &event["kind"],
-            &event["tags"],
-            &event["content"]
-    };
-
-    std::string eventData = eventToSign.to_json(docdb::Structured::flagUTF8);
-
-    // Calculate sha256 hash of serialized event data
-    SHA256(reinterpret_cast<const uint8_t*>(eventData.data()), eventData.size(), hash.data());
-}
-
-
-bool SignatureTools::verify(const Event &event) const {
-
-    HashSha256 hash;
-    get_hash(event, hash);
-
-    // convert pubkey to binary
-    unsigned char pubkey_bin[32];
-    hexToBytes(event["pubkey"].as<std::string_view>(), [&,pos = 0U](unsigned char x) mutable {
-       if (pos < sizeof(pubkey_bin)) pubkey_bin[pos++] = x;
-    });
-
-    secp256k1_xonly_pubkey pubkey_parsed;
-    if (!secp256k1_xonly_pubkey_parse(ctx.get(), &pubkey_parsed, pubkey_bin)) return false;
-
-    unsigned char sig[64];
-    hexToBytes(event["sig"].as<std::string_view>(), [&,pos = 0U](unsigned char x) mutable {
-       if (pos < sizeof(sig)) sig[pos++] = x;
-    });
-
-    return secp256k1_schnorrsig_verify(
-                ctx.get(),
-                sig,
-                hash.data(),
-#ifdef SECP256K1_SCHNORRSIG_EXTRAPARAMS_INIT // old versions of libsecp256k1 didn't take a msg size param, this define added just after
-                hash.size(),
-#endif
-                &pubkey_parsed
-    );
-
-
-}
-
 bool SignatureTools::verify(const HashSha256 &id, const PublicKey &pubkey, const Signature &sig) const {
     secp256k1_xonly_pubkey pubkey_parsed;
     if (!secp256k1_xonly_pubkey_parse(ctx.get(), &pubkey_parsed, pubkey.data())) return false;
@@ -88,49 +40,6 @@ bool SignatureTools::verify(const HashSha256 &id, const PublicKey &pubkey, const
     );
 }
 
-#if 0
-void SignatureTools::sign(Event &event) const {
-    HashSha256 hash;
-    get_hash(event, hash);
-
-    secp256k1_keypair_create(ctx, keypair, seckey)
-    secp256k1_schnorrsig_sign(ctx, sig64, msg32, keypair, aux_rand32)ctx, sig64, msg32, keypair, aux_rand32)
-
-}
-#endif
-
-std::string SignatureTools::calculate_keypair(const PrivateKey &key, secp256k1_keypair &kp) const {
-    if (secp256k1_keypair_create(ctx.get(), &kp, key.data())) {
-        secp256k1_xonly_pubkey pub;
-        if (secp256k1_keypair_xonly_pub(ctx.get(), &pub, nullptr, &kp)) {
-            PublicKey pubk;
-            if (secp256k1_xonly_pubkey_serialize(ctx.get(), pubk.data(), &pub)) {
-                return to_hex(pubk.data(), pubk.size());
-            }
-        }
-    }
-    return {};
-}
-
-
-bool SignatureTools::sign(const PrivateKey &key, Event &event) const {
-    secp256k1_keypair kp;
-    std::string pubkey = calculate_keypair(key, kp);
-    if (pubkey.empty()) return false;
-    event.set("pubkey", pubkey);
-    if (!event["created_at"].contains<std::time_t>()) {
-        event.set("created_at", std::chrono::system_clock::to_time_t(std::chrono::system_clock::now()));
-    }
-    unsigned char sig64[64];
-    HashSha256 hash;
-    get_hash(event, hash);
-    event.set("id",to_hex(hash.data(), hash.size()));
-    if (secp256k1_schnorrsig_sign(ctx.get(), sig64, hash.data(), &kp, nullptr)) {
-        event.set("sig", to_hex(sig64, sizeof(sig64)));
-        return true;
-    }
-    return false;
-}
 
 bool SignatureTools::sign(const PrivateKey &key, const HashSha256 &id, Signature &sig, PublicKey &pub) const {
     secp256k1_keypair kp;
@@ -141,13 +50,9 @@ bool SignatureTools::sign(const PrivateKey &key, const HashSha256 &id, Signature
     return secp256k1_schnorrsig_sign(ctx.get(), sig.data(), id.data(), &kp, nullptr);
 }
 
-std::string SignatureTools::calculate_pubkey(const PrivateKey &key) const {
-    secp256k1_keypair kp;
-    return calculate_keypair(key, kp);
-}
 
 
-std::string SignatureTools::to_hex(unsigned char *content, std::size_t len) {
+static std::string to_hex(unsigned char *content, std::size_t len) {
     std::string out;
     constexpr char hexletters[] = "0123456789abcdef";
     for (std::size_t i = 0; i < len; i++ ) {
@@ -227,6 +132,23 @@ std::string SignatureTools::from_bech32(const std::string &bech, std::string_vie
 
 }
 
+
+
+template<typename Fn>
+static void hexToBytes(
+        const std::string_view &hexString, Fn &&fn) {
+    char buff[3];
+    buff[2] = 0;
+    for (size_t i = 0; i < hexString.length(); i += 2) {
+        buff[0] = hexString[i];
+        buff[1] = hexString[i+1];
+        auto byte = static_cast<unsigned char>(std::stoi(buff, nullptr, 16));
+        fn(byte);
+    }
+
+}
+
+
 std::string SignatureTools::to_npub(std::string_view public_key) {
     PublicKey key;
     hexToBytes(public_key, [&, p = 0U](unsigned char c) mutable {
@@ -258,13 +180,11 @@ static int copy_shared_pt_x(unsigned char *output,const unsigned char *x32,const
     return 1;
 }
 
-bool SignatureTools::create_shared_secret(const PrivateKey &pk, const std::string_view &to_publickey, SharedSecret &secret) {
+bool SignatureTools::shared_secret(const PrivateKey &pk, const PublicKey &pub, SharedSecret &secret) const {
     unsigned char pubkey_bin[33];
 
     pubkey_bin[0] = 2;
-    hexToBytes(to_publickey, [&,pos = 1U](unsigned char x) mutable {
-       if (pos < sizeof(pubkey_bin)) pubkey_bin[pos++] = x;
-    });
+    std::copy(pub.begin(), pub.end(), pubkey_bin+1);
 
     secp256k1_pubkey pubk;
     if (!secp256k1_ec_pubkey_parse(ctx.get(), &pubk, pubkey_bin, sizeof(pubkey_bin))) {
@@ -278,60 +198,31 @@ bool SignatureTools::create_shared_secret(const PrivateKey &pk, const std::strin
 
 }
 
-std::optional<Event> SignatureTools::create_private_message(const PrivateKey &pk,
-                const std::string_view &to_publickey, const std::string_view &text,
-                std::time_t created_at, Event &&skelet) {
 
-    SharedSecret shared_secret;
-    if (!create_shared_secret(pk, to_publickey, shared_secret)) return {};
-
+bool SignatureTools::encrypt(const PrivateKey &sender, const PublicKey &receiver, std::string_view message, std::string &encrypted_message) const {
+    SharedSecret secret;
     unsigned char iv[16];
-
-    if (RAND_bytes(iv, sizeof(iv)) != 1) {
-        return {};
-    }
-
-
+    if (!shared_secret(sender, receiver, secret)) return false;
+    if (RAND_bytes(iv, sizeof(iv)) != 1) return false;
     PEVP_CIPHER_CTX evp_ctx(EVP_CIPHER_CTX_new());
-    if (!evp_ctx) return {};
-
-    if (EVP_EncryptInit_ex(evp_ctx.get(), EVP_aes_256_cbc(), nullptr, shared_secret.data(), iv) != 1) {
-        return {};
-    }
-
-    std::vector<uint8_t> ciphertext(text.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
+    if (!evp_ctx) return false;
+    if (EVP_EncryptInit_ex(evp_ctx.get(), EVP_aes_256_cbc(), nullptr, secret.data(), iv) != 1) return false;
+    std::vector<uint8_t> ciphertext(message.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
     int len = ciphertext.size();
-    if (EVP_EncryptUpdate(evp_ctx.get(), ciphertext.data(), &len, reinterpret_cast<const unsigned char*>(text.data()), text.size()) != 1) {
-        return {};
-    }
+    if (EVP_EncryptUpdate(evp_ctx.get(), ciphertext.data(), &len, reinterpret_cast<const unsigned char*>(message.data()), message.size()) != 1) return false;
     int len2 = ciphertext.size()- len;;
-    if (EVP_EncryptFinal_ex(evp_ctx.get(), ciphertext.data() + len, &len2) != 1) {
-        return {};
-    }
+    if (EVP_EncryptFinal_ex(evp_ctx.get(), ciphertext.data() + len, &len2) != 1) return false;
     len+=len2;
-    std::string outmsg;
     coroserver::base64::encode(std::string_view(reinterpret_cast<char *>(ciphertext.data()), len),
-            [&](char c){outmsg.push_back(c);});
-    outmsg.append("?iv=");
+            [&](char c){encrypted_message.push_back(c);});
+    encrypted_message.append("?iv=");
     coroserver::base64::encode(std::string_view(reinterpret_cast<char *>(iv), sizeof(iv)),
-            [&](char c){outmsg.push_back(c);});
-
-    skelet.set("content", outmsg);
-    skelet.set("kind",4);
-    skelet.set("created_at", created_at);
-    auto tags = skelet["tags"].array();
-    tags.push_back({"p",std::string(to_publickey)});
-    skelet.set("tags", tags);
-    sign(pk, skelet);
-    return skelet;
+            [&](char c){encrypted_message.push_back(c);});
+    return true;
 }
-
-std::optional<std::string> SignatureTools::decrypt_private_message(const PrivateKey &pk, const Event &ev) {
-
-    std::string_view to_publickey = ev["pubkey"].as<std::string_view>();
-    std::string_view message = ev["content"].as<std::string_view>();
-    auto pos = message.find("?iv=");
-    if (pos == message.npos) return {};
+bool SignatureTools::decrypt(const PrivateKey &receiver, const PublicKey &sender, std::string_view encrypted_message, std::string &message) const {
+    auto pos = encrypted_message.find("?iv=");
+    if (pos == encrypted_message.npos) return false;
     auto iv_text = message.substr(pos+4);
     auto cipher_text = message.substr(0,pos);
     unsigned char iv[16];
@@ -347,12 +238,10 @@ std::optional<std::string> SignatureTools::decrypt_private_message(const Private
 
     PEVP_CIPHER_CTX evp_ctx(EVP_CIPHER_CTX_new());
 
-    SharedSecret shared_secret;
-    if (!create_shared_secret(pk, to_publickey, shared_secret)) return {};
+    SharedSecret secret;
+    if (!shared_secret(receiver, sender, secret)) return false;
 
-    if (EVP_DecryptInit_ex(evp_ctx.get(), EVP_aes_256_cbc(), nullptr, shared_secret.data(), iv) != 1) {
-        return {};
-    }
+    if (EVP_DecryptInit_ex(evp_ctx.get(), EVP_aes_256_cbc(), nullptr, secret.data(), iv) != 1) return false;
 
     int len;
 
@@ -360,26 +249,24 @@ std::optional<std::string> SignatureTools::decrypt_private_message(const Private
     std::vector<uint8_t> plaintext(bin_message.size() + EVP_CIPHER_block_size(EVP_aes_256_cbc()));
     int plaintextLen = bin_message.size();
 
-    if (EVP_DecryptUpdate(evp_ctx.get(), plaintext.data(), &len, reinterpret_cast<const unsigned char*>(bin_message.data()), bin_message.size()) != 1) {
-        return {};
-    }
+    if (EVP_DecryptUpdate(evp_ctx.get(), plaintext.data(), &len, reinterpret_cast<const unsigned char*>(bin_message.data()), bin_message.size()) != 1) return false;
     plaintextLen = len;
-    if (EVP_DecryptFinal_ex(evp_ctx.get(), plaintext.data() + len, &len) != 1) {
-        return {};
-    }
+    if (EVP_DecryptFinal_ex(evp_ctx.get(), plaintext.data() + len, &len) != 1) return false;
     plaintextLen += len;
 
-    return std::string(reinterpret_cast<const char *>(plaintext.data()), plaintextLen);
+    message.append(reinterpret_cast<const char *>(plaintext.data()), plaintextLen);
+    return true;
 }
 
-std::string SignatureTools::create_private_key(PrivateKey &key) const {
-    std::string  out;
+bool SignatureTools::random_private_key(PrivateKey &key) const {
     while (true) {
         if (RAND_bytes(key.data(), key.size()) != 1) {
             return {};
         }
-        out = calculate_pubkey(key);
-        if (!out.empty()) return out;
+        secp256k1_keypair kp;
+        if (secp256k1_keypair_create(ctx.get(), &kp, key.data())) {
+            return true;
+        }
     }
 
 }

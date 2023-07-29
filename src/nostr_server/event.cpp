@@ -10,6 +10,10 @@ namespace nostr_server {
 Event Event::fromJSON(std::string_view json_text)
 {
     auto sevent = docdb::Structured::from_json(json_text);
+    return fromStructured(sevent);
+}
+Event Event::fromStructured(const docdb::Structured &sevent) {
+
     const auto &s_id = sevent["id"];
     const auto &s_pubkey = sevent["pubkey"];
     const auto &s_content = sevent["content"];

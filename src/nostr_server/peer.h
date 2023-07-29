@@ -64,15 +64,15 @@ protected:
     telemetry::SharedSensor<SharedStats> _shared_sensor;
 
 
-    void on_event(docdb::Structured &msg);
-    void on_req(const docdb::Structured &msg);
-    void on_count(const docdb::Structured &msg);
-    void on_close(const docdb::Structured &msg);
+    void on_event(const JSON &msg);
+    void on_req(const JSON &msg);
+    void on_count(const JSON &msg);
+    void on_close(const JSON &msg);
 
     void event_deletion(Event &&event);
 
     template<typename Fn>
-    void filter_event(const docdb::Structured &doc, Fn fn) const;
+    void filter_event(const Event &doc, Fn fn) const;
 
     bool check_pow(std::string_view id) const;
     void prepare_auth_challenge();

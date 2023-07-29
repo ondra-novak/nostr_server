@@ -22,7 +22,7 @@ namespace nostr_server {
 class App: public std::enable_shared_from_this<App>, public IApp {
 public:
 
-    static const Event supported_nips;
+    static const docdb::Structured supported_nips;
     static const std::string software_url;
     static const std::string software_version;
 
@@ -37,7 +37,7 @@ public:
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
     virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const override ;
     virtual docdb::PDatabase get_database() const override {return _db;}
-    virtual Event get_server_capabilities() const override;
+    virtual JSON get_server_capabilities() const override;
     virtual bool is_home_user(std::string_view pubkey) const override;
     virtual void client_counter(int increment) override;
     virtual void publish(Event &&ev, const void *publisher) override;

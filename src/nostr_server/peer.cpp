@@ -77,7 +77,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 }
 
 template<typename Fn>
-void Peer::filter_event(const docdb::Structured &doc, Fn fn) const  {
+void Peer::filter_event(const Event &doc, Fn fn) const  {
     std::lock_guard _(_mx);
     for (const auto &sbs: _subscriptions) {
         bool found = false;
@@ -152,8 +152,8 @@ void Peer::processMessage(std::string_view msg_text) {
     }
 }
 
-cocls::suspend_point<bool> Peer::send(const docdb::Structured &msgdata) {
-    std::string json = msgdata.to_json(docdb::Structured::flagUTF8);
+cocls::suspend_point<bool> Peer::send(const JSON &msgdata) {
+    std::string json = msgdata.to_json(JSON::flagUTF8);
     _req.log_message([&](auto emit){
         std::string msg = "Send: ";
         msg.append(json);
@@ -176,12 +176,12 @@ void Peer::send_error(std::string_view id, std::string_view text) {
 
 }
 
-void Peer::on_event(docdb::Structured &msg) {
+void Peer::on_event(const JSON &msg) {
     std::string id;
     try {
-        docdb::Structured event(std::move(msg.at(1)));
-        id = event["id"].as<std::string_view>();
-        std::string_view pubkey = event["pubkey"].as<std::string_view>();
+        Event event = Event::fromStructured(msg[1]);
+        id = binary_to_hexstr(event.id);
+//        std::string_view pubkey = event["pubkey"].as<std::string_view>();
         auto now = std::chrono::system_clock::now();
         if (!_no_limit && !_rate_limiter.test_and_add(now)) {
             send_error(id,
@@ -199,7 +199,7 @@ void Peer::on_event(docdb::Structured &msg) {
         if (!_secp->verify(event)) {
             throw std::invalid_argument("Signature verification failed");
         }
-        auto kind = event["kind"].as<unsigned int>();
+        const auto &kind = event.kind;
         if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
             _app->get_publisher().publish(EventSource{std::move(event),this});
             _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});

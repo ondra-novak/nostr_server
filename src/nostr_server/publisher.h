@@ -14,6 +14,8 @@ using EventSource = std::pair<Event, const void *>;
 
 using EventPublisher = cocls::publisher<EventSource>;
 using EventSubscriber = cocls::subscriber<EventSource>;
+using JSON = docdb::Structured;
+
 
 }
 

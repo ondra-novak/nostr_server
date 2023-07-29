@@ -16,19 +16,12 @@ namespace nostr_server {
 class IApp {
 public:
 
-
-
-    using DocumentType =docdb::StructuredDocument<docdb::Structured::use_string_view> ;
-
-    using AuthorKindTagKey = std::tuple<std::string_view, unsigned int, std::string_view>;
+    using AuthorKindTagKey = std::tuple<Event::Pubkey, unsigned int, std::string_view>;
     using TimestampRowDef = docdb::FixedRowDocument<std::time_t>;
     using IdHashKey = std::size_t;
 
-    using Storage = docdb::Storage<DocumentType>;
+    using Storage = docdb::Storage<EventDocument>;
     using IndexViewByAuthorKindTag = docdb::IndexView<Storage,TimestampRowDef, docdb::IndexType::unique>;
-
-
-
 
     using OrderingItem = std::pair<unsigned int, unsigned int>;
     using RecordSetCalculator = docdb::RecordsetStackT<docdb::DocID, OrderingItem>;
@@ -49,7 +42,7 @@ public:
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
-    virtual Event get_server_capabilities() const = 0;
+    virtual JSON get_server_capabilities() const = 0;
     virtual bool is_home_user(std::string_view pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;

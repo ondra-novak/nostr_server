@@ -9,7 +9,7 @@ add_executable(nostr_server
 	rate_limiter.cpp
 	telemetry_def.cpp
 	bech32.cpp
-	relay_bot.cpp
+#	relay_bot.cpp
 	filter.cpp
 	event.cpp
 )
