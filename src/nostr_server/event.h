@@ -40,6 +40,7 @@ struct Event {
     std::string content;
     std::vector<Tag> tags;
     std::time_t created_at = 0;
+    std::vector<std::uint16_t> tag_hash_map;
 
     ID id;
     Pubkey author;
@@ -70,6 +71,8 @@ struct Event {
     void for_each_tag(const std::string_view tag, Fn fn) const {
         for (const Tag &t: tags) if (t.tag == tag) fn(t);
     }
+    void build_hash_map();
+    const Tag *find_indexed_tag(char t, std::string_view content) const;
 };
 
 struct EventDocument {
@@ -126,6 +129,7 @@ struct EventDocument {
         load_bin(at, end, ev.author);
         load_bin(at, end, ev.sig);    
         assert(ev.calc_id() == ev.id);    
+        ev.build_hash_map();
         return ev;
      }
 

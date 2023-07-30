@@ -12,6 +12,7 @@ add_executable(nostr_server
 #	relay_bot.cpp
 	filter.cpp
 	event.cpp
+	whitelist.cpp
 )
 
 target_link_libraries(nostr_server

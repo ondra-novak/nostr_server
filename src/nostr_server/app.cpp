@@ -288,29 +288,19 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                 calc.AND(merge_relevance);
                 if (calc.is_top_empty()) break;
             }
-            if (!f.tags.empty()) {
-                auto iter = f.tags_begin();
-                auto end = f.tags_end();
-                while (iter != end) {
-                    calc.push(calc.empty_set());
-                    auto tend = f.tags_next(iter);
-                    while (iter != tend) {
-                        char t = iter->first;
-                        std::string_view val = iter->second;
-                        std::size_t h = hasher(val);
-                        docdb::Key from(t,h);
-                        docdb::Key to(t,h);
-                        append_time(f,from, to);
-                        need_time = false;
-                        calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
-                                multi_index_ordering<unsigned char, std::size_t>());
-                        calc.OR(merge_relevance);
-                        ++iter;
-                    }
-                    calc.AND(merge_relevance);
-                    if (calc.is_top_empty()) break;
+            for(const auto &[t, contents]:f.tags) {
+                calc.push(calc.empty_set());    
+                for (const auto &x: contents) {
+                    std::size_t h = hasher(x);
+                    docdb::Key from(t,h);
+                    docdb::Key to(t,h);
+                    append_time(f,from, to);
+                    need_time = false;
+                    calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
+                            multi_index_ordering<unsigned char, std::size_t>());
+                    calc.OR(merge_relevance);                
                 }
-                if (calc.is_top_empty()) break;
+                calc.AND(merge_relevance);
             }
             if (!f.kinds.empty()) {
                 calc.push(calc.empty_set());

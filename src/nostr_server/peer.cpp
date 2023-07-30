@@ -180,8 +180,8 @@ void Peer::send_error(std::string_view id, std::string_view text) {
 void Peer::on_event(const JSON &msg) {
     std::string id;
     try {
+        id = msg[1]["id"].as<std::string>();
         Event event = Event::fromStructured(msg[1]);
-        id = binary_to_hexstr(event.id);
 //        std::string_view pubkey = event["pubkey"].as<std::string_view>();
         auto now = std::chrono::system_clock::now();
         if (!_no_limit && !_rate_limiter.test_and_add(now)) {

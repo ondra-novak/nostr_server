@@ -29,19 +29,14 @@ try {
     if (!authors.empty() && std::find_if(authors.begin(), authors.end(), cmp_shorten(doc.author)) == authors.end()) return false;
     if (!ids.empty() && std::find_if(ids.begin(), ids.end(), cmp_shorten(doc.id)) == ids.end()) return false;
     if (!kinds.empty() && std::find(kinds.begin(), kinds.end(), doc.kind) == kinds.end()) return false;
-    if (!tags.empty()) {
-        std::uint64_t checks = 0;
-        for (const auto &tag : doc.tags) {
-            if (tag.tag.size() == 1) {
-                char t = tag.tag[0];
-                auto iter = std::lower_bound(tags.begin(), tags.end(), std::pair(t, tag.content), std::less<std::pair<char, std::string_view> >());
-                if (iter != tags.end() && iter->first == t && iter->second == tag.content) {
-                    checks |= tag2mask(t);
-                }
-            }
+    for (const auto &[t, contents]: tags) {
+        const Event::Tag *f  = nullptr;
+        for (const auto &c : contents) {
+            f = doc.find_indexed_tag(t,c);
+            if (f) break;
         }
-        if ((checks & tag_mask) != tag_mask) return false;
-    }
+        if (!f) return false;
+    }    
     if (since.has_value()) {
         if (doc.created_at < *since) return false;
     }
@@ -84,15 +79,11 @@ Filter Filter::create(const JSON &f) {
         } else if (k.substr(0,1) == "#") {
             auto t = k.substr(1);
             if (t.size() == 1) {
-                char n = t[0];
-                auto mask = tag2mask(n);
-                if (mask) {
-                    const auto &a = v.array();
-                    StringOptions opts;
-                    for (const auto &c: a)  {
-                        out.tags.push_back(std::pair(n,c.as<std::string>()));
-                    }
-                    out.tag_mask |= mask;
+                out.tags.push_back({t[0],{}});
+                auto &tt = out.tags.back().second;
+                const auto &a = v.array();
+                for (const auto &c: a) {
+                    tt.push_back(c.as<std::string>());
                 }
             }
         } else if (k == "since") {

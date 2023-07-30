@@ -60,8 +60,41 @@ Event Event::fromStructured(const docdb::Structured &sevent) {
     }
     ID cid = ev.calc_id();
     if (cid != ev.id) throw EventParseException(EventParseException::invalid_id);
+    ev.build_hash_map();
     return ev;
 }
+
+static std::size_t tag_hash(char t, std::string_view content) {
+    std::hash<std::string_view> hasher;
+    return hasher(content) * 31 + t;
+}
+
+
+void Event::build_hash_map() {
+    tag_hash_map.clear();
+    tag_hash_map.resize(tags.size()*2+1,0);
+    for (const auto &t: tags) {
+        if (t.tag.size() != 1) continue;
+        std::size_t idx = tag_hash(t.tag[0],t.content) % tag_hash_map.size();
+        while (tag_hash_map[idx]) {
+            idx = (idx+1) % tag_hash_map.size();
+        }
+        tag_hash_map[idx] = &t - tags.data() + 1;
+    }
+}
+
+const Event::Tag *Event::find_indexed_tag(char t, std::string_view content) const {
+    if (tag_hash_map.empty()) return nullptr;
+    auto idx = tag_hash(t,content) % tag_hash_map.size();;
+    while (tag_hash_map[idx]) {
+        auto f = tag_hash_map[idx];
+        const auto &tr = tags[f-1];
+        if (tr.tag[0] == t && tr.content == content) return &tr;
+        idx = (idx+1) % tag_hash_map.size();
+    }
+    return nullptr;
+}
+
 
 docdb::Structured::Array build_tags(const Event &ev) {
     docdb::Structured::Array tags_arr;
@@ -157,6 +190,6 @@ std::string_view EventParseException::message(Error err)
 const char *EventParseException::what() const noexcept
 {
     if (msg.empty()) msg = std::string(message(_err));
-    return nullptr;
+    return msg.c_str();
 }
 }
