@@ -19,10 +19,8 @@ struct ServerOptions {
     int pow = 0; //specifies count of bits for Proof of work (0 - disabled)
     int event_rate_window = 10;
     int event_rate_limit = 10;
-    bool auth;
-    bool block_strangers;
-    bool foreign_relaying;
     bool read_only;
+    bool whitelisting;
     std::string replicators;
     std::string http_header_ident;
 };

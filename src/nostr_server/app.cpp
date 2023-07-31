@@ -38,6 +38,7 @@ App::App(const Config &cfg)
         ,_index_kind_time(_storage, "kind_time")
         ,_index_time(_storage, "time")
         ,_index_fulltext(_storage, "fulltext")
+        ,_index_whitelist(_storage, "karma")
 {
     if (cfg.metric.enable) {
         register_scavengers(*_omcoll);
@@ -45,7 +46,7 @@ App::App(const Config &cfg)
         _dbsensor.enable(_db);
         _storage_sensor.enable(StorageSensor{&_storage});
     }
-
+    _empty_database = _index_whitelist.select_all().empty();
 }
 
 
@@ -158,6 +159,14 @@ docdb::DocID App::find_replacable(std::string_view pubkey, unsigned int kind, st
         return 0;
     }
 
+}
+
+bool App::check_whitelist(const Event::Pubkey &k)
+{
+    if (_empty_database) return true;
+    auto r = _index_whitelist.find(k);
+    if (!r) return false;
+    return r->get_score() > 0;
 }
 
 static void append_time(const Filter &f, docdb::Key &from, docdb::Key &to) {
@@ -357,9 +366,6 @@ JSON App::get_server_capabilities() const {
     if (_server_options.pow) {
         limitation.set("min_pow_difficulty", _server_options.pow);
     }
-    if (_server_options.auth) {
-        limitation.set("auth_required", true);
-    }
     limitation.set("min_prefix",32);
     JSON doc = {
         {"name", _server_desc.name},
@@ -397,6 +403,7 @@ void App::publish(Event &&event, const void *publisher)  {
     auto to_replace = doc_to_replace(event);
     if (to_replace != docdb::DocID(-1)) {
         _storage.put(event, to_replace);
+        _empty_database = false;
     }
     event_publish.publish(EventSource{std::move(event),publisher});
 }

@@ -7,6 +7,7 @@
 #include "iapp.h"
 #include "telemetry_def.h"
 #include "../telemetry/open_metrics/Collector.h"
+#include "whitelist.h"
 
 
 #include <docdb/json.h>
@@ -42,6 +43,7 @@ public:
     virtual void client_counter(int increment) override;
     virtual void publish(Event &&ev, const void *publisher) override;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;
+    virtual bool check_whitelist(const Event::Pubkey &k) override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -92,6 +94,7 @@ protected:
     std::shared_ptr<telemetry::open_metrics::Collector> _omcoll;
     telemetry::SharedSensor<docdb::PDatabase> _dbsensor;
     telemetry::SharedSensor<StorageSensor> _storage_sensor;
+    bool _empty_database = true;
 
     std::atomic<int> _clients = {};
 
@@ -103,6 +106,7 @@ protected:
     IndexKindTime _index_kind_time;
     IndexTime _index_time;
     IndexForFulltext _index_fulltext;
+    WhiteListIndex _index_whitelist;
 
 
 

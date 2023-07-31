@@ -46,6 +46,7 @@ public:
     virtual bool is_home_user(const Event::Pubkey & pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
+    virtual bool check_whitelist(const Event::Pubkey &k) = 0;
 
 };
 

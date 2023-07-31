@@ -104,9 +104,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.options.pow = options["pow"].getUInt(0);
     outcfg.options.event_rate_limit = options["event_rate_limit"].getUInt(6);
     outcfg.options.event_rate_window = options["event_rate_window"].getUInt(60);
-    outcfg.options.auth = options["auth"].getBool(false);
-    outcfg.options.block_strangers = options["block_strangers"].getBool(false);
-    outcfg.options.foreign_relaying = options["foreign_relaying"].getBool(false);
+    outcfg.options.whitelisting = options["whitelisting"].getBool(true);
     outcfg.options.replicators = options["replicators"].getString();
     outcfg.options.read_only= options["read_only"].getBool(false);
 

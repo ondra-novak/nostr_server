@@ -34,9 +34,7 @@ NAMED_ENUM(Command,
         EOSE,
         NOTICE,
         AUTH,
-        OK,
-        HELLO,
-        WELCOME
+        OK
 );
 constexpr NamedEnum_Command commands={};
 
@@ -109,47 +107,46 @@ cocls::future<void> Peer::listen_publisher() {
 
 
 void Peer::processMessage(std::string_view msg_text) {
-    _req.log_message([&](auto logger){
-        std::ostringstream buff;
-        buff << "Received: " << msg_text;
-        logger(buff.view());
-    });
+    try {
+        _req.log_message([&](auto logger){
+            std::ostringstream buff;
+            buff << "Received: " << msg_text;
+            logger(buff.view());
+        });
 
-    auto msg = docdb::Structured::from_json(msg_text);
-    std::string_view cmd_text = msg[0].as<std::string_view>();
+        auto msg = docdb::Structured::from_json(msg_text);
+        std::string_view cmd_text = msg[0].as<std::string_view>();
 
 
-    Command cmd = commands[cmd_text];
+        Command cmd = commands[cmd_text];
 
-    _sensor.update([&](ClientSensor &szn){
-        ++szn.command_counter;
-    });
+        _sensor.update([&](ClientSensor &szn){
+            ++szn.command_counter;
+        });
 
-    switch (cmd) {
-        case Command::EVENT:
-            if (!check_for_auth()) return;
-            on_event(msg); break;
-        case Command::REQ:
-            if (!check_for_auth()) return;
-            on_req(msg);break;
-        case Command::COUNT:
-            if (!check_for_auth()) return;
-            on_count(msg);break;
-        case Command::CLOSE:
-            if (!check_for_auth()) return;
-            on_close(msg);break;
-        case Command::HELLO:
-            _hello_recv = true;
-            _client_capabilities = msg[1];
-            if (!check_for_auth()) return;
-            send_welcome();
-            break;
-        case Command::AUTH:
-            process_auth(msg[1]);
-            break;
-        default: {
-            send_notice(std::string("Unknown command: ").append(cmd_text));
+        switch (cmd) {
+            case Command::EVENT:
+                on_event(msg); break;
+            case Command::REQ:
+                on_req(msg);break;
+            case Command::COUNT:
+                on_count(msg);break;
+            case Command::CLOSE:
+                on_close(msg);break;
+            case Command::AUTH:
+                process_auth(msg[1]);
+                break;
+            default: {
+                send_notice(std::string("Unknown command: ").append(cmd_text));
+            }
         }
+    } catch (std::exception &e) {
+        send_notice("error: Internal error - command ignored");
+        _req.log_message([&](auto emit){
+            std::string msg = "Peer exception:";
+            msg.append(e.what());
+            emit(msg);
+        });
     }
 }
 
@@ -209,33 +206,23 @@ void Peer::on_event(const JSON &msg) {
         if (!_no_limit && _options.read_only /*&& _options.replicators.find(pubkey) == _options.replicators.npos*/) {
             throw Blocked("Sorry, server is in read_only mode");
         }
+        if (!_no_limit && _options.whitelisting) {
+            if (!_app->check_whitelist(event.author)) {
+                if (kind == 4) {
+                    auto target = event.get_tag_content("p");
+                    Event::Pubkey pk;
+                    binary_from_hex(target.begin(), target.end(), pk);
+                    if (!_app->is_home_user(pk)) throw Blocked("Target user not found");
+                } else {
+                    throw Blocked("Not invited");
+                }
+            }
+        }
         if (kind == 5) {
             event_deletion(event);
             return;
         }
-        if (!_no_limit && !_options.foreign_relaying && _options.auth) {
-            if (event.author != _auth_pubkey) {
-                throw Blocked("Relaying foreign events is not allowed here");
-            }
-        }
-        if (!_no_limit && _options.block_strangers) {
-            bool unblock = _app->is_home_user(event.author);
-            if (!unblock) {
-                auto unblock_pk = [&](const Event::Tag &t){
-                    if (!unblock) {
-                        Event::Pubkey pk;
-                        binary_from_hex(t.content.begin(), t.content.end(), pk);
-                        unblock = _app->is_home_user(pk);
-                    }
-                };
-                event.for_each_tag("p",unblock_pk);
-                event.for_each_tag("delegation",unblock_pk);
-                if (!unblock) {
-                    throw Blocked("This place is not for strangers");
-                }
-            }
-        }
-        _app->publish(std::move(event), this);
+       _app->publish(std::move(event), this);
         send({commands[Command::OK], id, true, ""});
         _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
     } catch (const EventParseException &e) {
@@ -432,16 +419,9 @@ void Peer::process_auth(const JSON &jevent) {
             _no_limit = true;
         }
 */
-        if (_hello_recv) {
-            send_welcome();
-        } else {
-            send({commands[Command::OK], id, true, "Welcome on relay!"});
-        }
+        send({commands[Command::OK], id, true, "Welcome on relay!"});
     } catch (const std::exception &e) {
         send_error(id,std::string("restricted:") + e.what());
-        if (_hello_recv) {
-            _stream.close();
-        }
     }
 
 }
@@ -453,17 +433,5 @@ void Peer::send_notice(std::string_view text) {
     });
 }
 
-bool Peer::check_for_auth() {
-    if (!_options.auth) return true;
-    if (!_authent) {
-        send_notice("restricted: Authentication is mandatory on this relay");
-        return false;
-    }
-    return true;
-}
-
-void Peer::send_welcome() {
-    send({commands[Command::WELCOME], _app->get_server_capabilities()});
-}
 
 }

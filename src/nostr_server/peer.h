@@ -45,7 +45,6 @@ protected:
     std::optional<SignatureTools> _secp;
     RateLimiter _rate_limiter;
     bool _authent = false;
-    bool _hello_recv = false;
     bool _no_limit = false;
     Event::Pubkey _auth_pubkey;
     std::string _auth_nonce;
@@ -78,9 +77,6 @@ protected:
     bool check_pow(std::string_view id) const;
     void prepare_auth_challenge();
     void process_auth(const JSON &jmsg);
-    bool check_for_auth();
-    void send_welcome();
-
     void send_error(std::string_view id, std::string_view text);
     void send_notice(std::string_view text);
 };

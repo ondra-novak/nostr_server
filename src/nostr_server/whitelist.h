@@ -12,13 +12,14 @@
 namespace nostr_server {
 
 struct Karma {
-    unsigned int followers;
-    unsigned int mutes;
-    unsigned int mentions;
-    unsigned int directmsgs;
+    unsigned int followers = 0;
+    unsigned int mutes = 0;
+    unsigned int mentions = 0;
+    unsigned int directmsgs = 0;
+    bool local = false;
 
     int get_score() const { 
-        return std::min(2U, mentions) + std::min(2U, directmsgs)+followers-mutes;
+        return (local?2:0)+std::min(2U, mentions) + std::min(2U, directmsgs)+followers-mutes;
     }
 };
 
@@ -33,7 +34,7 @@ struct KarmaDocument {
     template<typename Iter>
     static Karma from_binary(Iter &at, Iter end) {
         Karma what;
-        char *from = reinterpret_cast<const char *>(&what);
+        char *from = reinterpret_cast<char *>(&what);
         char *to = from+sizeof(Karma);
         while(from != to && at != end) {
             *from = *at;
@@ -45,13 +46,56 @@ struct KarmaDocument {
 };
 
 struct WhiteListIndexFn {
-    static constexpr int revision = 3;
+    static constexpr int revision = 4;
     template<typename Emit> void operator ()(Emit emit, const Event &ev) const {
-        
+    
+        auto update_counter = [&](unsigned int (Karma::*val)) {
+                ev.for_each_tag("p",[&](const Event::Tag &t){
+                    Event::Pubkey pubkey;
+                    binary_from_hex(t.content.begin(), t.content.end(), pubkey);
+                    auto v = emit(pubkey);
+                    if constexpr(emit.erase) {
+                        if (v) {
+                            Karma k = *v;
+                            --(k.*val);
+                            v.put(k);
+                        } 
+                    } else {
+                        Karma k;
+                        if (v) k = *v;
+                        ++(k.*val);
+                        v.put(k);
+                    }
+                });
+        };
+        if (ev.kind < 4)
+        {
+            if constexpr(!emit.erase) {
+                auto v = emit(ev.author);
+                if (!v) {
+                    Karma k;
+                    k.local = true;
+                    v.put(k);
+                } else if (!v->local) {
+                    v->local = true;
+                    v.put(*v);
+                }
+            }
+        } else {
+            auto v = emit(ev.author);
+            if (!v || !v->local) return;
+        }
 
-
+        switch (ev.kind) {
+            case 1: update_counter(&Karma::mentions);break;
+            case 3: update_counter(&Karma::followers);break;
+            case 4: update_counter(&Karma::directmsgs);break;
+            case 10000: update_counter(&Karma::mutes);break;
+            default:break;
+        }
     }
 };
+
 
 using WhiteListIndex = docdb::IncrementalAggregator<IApp::Storage, WhiteListIndexFn, KarmaDocument>;
 
