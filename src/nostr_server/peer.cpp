@@ -51,7 +51,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
     bool res =co_await Server::accept(me._stream, me._req);
     if (!res) co_return true;
 
-    me._req.log_message("Connected client: "+std::string(ua));
+    me._req.log_message("Connected client: "+std::string(ua), static_cast<int>(PeerServerity::progress));
 
     //auth is always requested, but it is not always checked
     me.prepare_auth_challenge();
@@ -146,7 +146,7 @@ void Peer::processMessage(std::string_view msg_text) {
             std::string msg = "Peer exception:";
             msg.append(e.what());
             emit(msg);
-        });
+        },static_cast<int>(PeerServerity::warn));
     }
 }
 
@@ -171,6 +171,7 @@ void Peer::send_error(std::string_view id, std::string_view text) {
     _sensor.update([&](ClientSensor &szn){
         szn.error_counter++;
     });
+    _req.log_message(text, static_cast<int>(PeerServerity::warn));
 
 }
 
@@ -285,7 +286,7 @@ void Peer::on_req(const docdb::Structured &msg) {
                     }
                 }
             } else {
-                _req.log_message("Event missing for ID:"+std::to_string(cd.id), 10);
+                _req.log_message("Event missing for ID:"+std::to_string(cd.id), static_cast<int>(PeerServerity::error));
             }
         }
 

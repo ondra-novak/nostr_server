@@ -13,6 +13,16 @@
 
 namespace nostr_server {
 
+enum class PeerServerity: int {
+    debug,
+    progress,
+    warn,
+    error
+};
+
+
+
+
 class IApp {
 public:
 
