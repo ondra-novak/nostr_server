@@ -154,6 +154,7 @@ async function do_upload() {
     let size = el.files[0].size;
     let name = el.files[0].name;
     let type = el.files[0].type;
+    type = type?type:"application/octet-stream";
     let kind = document.getElementById("notekind").valueAsNumber;
     let event = {    
         content:desc,
