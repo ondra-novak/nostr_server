@@ -2,6 +2,8 @@
 #ifndef SRC_NOSTR_SERVER_EVENT_H_
 #define SRC_NOSTR_SERVER_EVENT_H_
 
+#include "binary.h"
+
 #include <docdb/row.h>
 #include <docdb/structured_document.h>
 
@@ -26,13 +28,13 @@ struct Event {
     };
 
 
-    using ID = std::array<unsigned char, 32>;
+    using ID = Binary<32>;
     using IDHex = std::array<char, 64>;
-    using Pubkey = std::array<unsigned char, 32>;
-    using PrivateKey = std::array<unsigned char, 32>;
+    using Pubkey = Binary<32>;
+    using PrivateKey = Binary<32>;
     using PubkeyHex = std::array<char, 64>;
-    using Signature = std::array<unsigned char, 64>; 
-    using SignatureHex = std::array<char, 128>; 
+    using Signature = Binary<64>;
+    using SignatureHex = std::array<char, 128>;
     using Kind = unsigned int;
 
 
@@ -91,8 +93,8 @@ struct EventDocument {
             out = Srl::uint_to_binary(0,t.additional_content.size(),out);
             for (const auto &z: t.additional_content) {
                 out = Srl::string_to_binary(0,z,out);
-            }  
-        } 
+            }
+        }
         std::copy(ev.id.begin(), ev.id.end(), out);
         std::copy(ev.author.begin(), ev.author.end(), out);
         std::copy(ev.sig.begin(), ev.sig.end(), out);
@@ -127,8 +129,8 @@ struct EventDocument {
         }
         load_bin(at, end, ev.id);
         load_bin(at, end, ev.author);
-        load_bin(at, end, ev.sig);    
-        assert(ev.calc_id() == ev.id);    
+        load_bin(at, end, ev.sig);
+        assert(ev.calc_id() == ev.id);
         ev.build_hash_map();
         return ev;
      }
@@ -175,8 +177,10 @@ public:
     Error get_error() const {return _err;}
 protected:
     Error _err;
-    mutable std::string msg;    
+    mutable std::string msg;
 };
+
+#if 0
 
 template<typename Iter, std::size_t sz>
 Iter binary_from_hex(Iter beg, Iter end, std::array<unsigned char, sz> &out){
@@ -224,10 +228,10 @@ template<std::size_t sz>
 std::string binary_to_hexstr(const std::array<unsigned char, sz> &in) {
     std::string out(sz*2,' ');
     binary_to_hex(in, out.begin());
-    return out;   
+    return out;
 }
 
-
+#endif
 
 }
 

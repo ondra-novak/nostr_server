@@ -3,6 +3,7 @@
 #define SRC_NOSTR_SERVER_IAPP_H_
 #include "publisher.h"
 #include "filter.h"
+#include "media.h"
 
 #include <docdb/database.h>
 #include <docdb/storage.h>
@@ -57,6 +58,9 @@ public:
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
     virtual bool check_whitelist(const Event::Pubkey &k) = 0;
+    virtual void publish_with_attachment(Event &&event, const MediaType &media, const Event::ID &mediaHash, const void *publisher) = 0;
+    virtual docdb::FoundRecord<MediaDocument> fetch_media(const Event::ID &mediaHash) const = 0;
+    virtual std::string get_media_link(const Event::ID &mediaHash) const = 0;
 
 };
 

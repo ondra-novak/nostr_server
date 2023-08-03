@@ -34,6 +34,11 @@ protected:
     ~Peer();
 
 
+    struct HashOfHash {
+        std::size_t operator()(const Binary<32> &x) const {
+            return x[0];
+        }
+    };
 
     coroserver::http::ServerRequest &_req;
     PApp _app;
@@ -49,6 +54,7 @@ protected:
     Event::Pubkey _auth_pubkey;
     std::string _auth_nonce;
     JSON _client_capabilities;
+    std::unordered_map<Binary<32>,Event, HashOfHash> _opened_files;
 
 
     Subscriptions _subscriptions;
@@ -57,6 +63,7 @@ protected:
 
 
     void processMessage(std::string_view msg_text);
+    void processBinaryMessage(std::string_view msg_text);
 
     cocls::suspend_point<bool> send(const docdb::Structured &msgdata);
 
@@ -64,10 +71,16 @@ protected:
     telemetry::SharedSensor<SharedStats> _shared_sensor;
 
 
+    template<typename Fn>
+    void on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_events);
+
     void on_event(const JSON &msg);
     void on_req(const JSON &msg);
     void on_count(const JSON &msg);
     void on_close(const JSON &msg);
+    void on_file(const JSON &msg);
+    void on_fetch(const JSON &msg);
+    void on_link(const JSON &msg);
 
     void event_deletion(const Event &event);
 

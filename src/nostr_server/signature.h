@@ -7,13 +7,14 @@
 
 #ifndef SRC_NOSTR_SERVER_SIGNATURE_H_
 #define SRC_NOSTR_SERVER_SIGNATURE_H_
-#include "publisher.h"
-
+//#include "publisher.h"
+#include "binary.h"
 
 
 #include <secp256k1.h>
 #include <secp256k1_extrakeys.h>
 
+#include <memory>
 
 
 namespace nostr_server {
@@ -21,11 +22,11 @@ namespace nostr_server {
 class SignatureTools {
 public:
 
-    using HashSha256 = std::array<unsigned char, 32>;
-    using SharedSecret = std::array<unsigned char, 32>;
-    using PrivateKey = std::array<unsigned char, 32>;
-    using PublicKey = std::array<unsigned char, 32>;
-    using Signature = std::array<unsigned char, 64>;
+    using HashSha256 = Binary<32>;
+    using SharedSecret = Binary<32>;
+    using PrivateKey = Binary<32>;
+    using PublicKey = Binary<32>;
+    using Signature = Binary<64>;
 
     SignatureTools();
 
@@ -41,7 +42,7 @@ public:
     static std::string to_bech32(std::string_view hex, const std::string &type);
 
     bool encrypt(const PrivateKey &sender, const PublicKey &receiver, std::string_view message, std::string &encrypted_message) const;
-    bool decrypt(const PrivateKey &receiver, const PublicKey &sender, std::string_view encrypted_message, std::string &message) const; 
+    bool decrypt(const PrivateKey &receiver, const PublicKey &sender, std::string_view encrypted_message, std::string &message) const;
     bool shared_secret(const PrivateKey &priv, const PublicKey &pub, SharedSecret &secret) const;
 
     bool random_private_key(PrivateKey &key) const;

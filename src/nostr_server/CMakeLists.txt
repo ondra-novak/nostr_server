@@ -12,6 +12,7 @@ add_executable(nostr_server
 #	relay_bot.cpp
 	filter.cpp
 	event.cpp
+	media.cpp
 	whitelist.cpp
 )
 

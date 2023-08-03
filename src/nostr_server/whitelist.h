@@ -18,7 +18,7 @@ struct Karma {
     unsigned int directmsgs = 0;
     bool local = false;
 
-    int get_score() const { 
+    int get_score() const {
         return (local?2:0)+std::min(2U, mentions) + std::min(2U, directmsgs)+followers-mutes;
     }
 };
@@ -48,18 +48,17 @@ struct KarmaDocument {
 struct WhiteListIndexFn {
     static constexpr int revision = 4;
     template<typename Emit> void operator ()(Emit emit, const Event &ev) const {
-    
+
         auto update_counter = [&](unsigned int (Karma::*val)) {
                 ev.for_each_tag("p",[&](const Event::Tag &t){
-                    Event::Pubkey pubkey;
-                    binary_from_hex(t.content.begin(), t.content.end(), pubkey);
+                    auto pubkey = Event::Pubkey::from_hex(t.content);
                     auto v = emit(pubkey);
                     if constexpr(emit.erase) {
                         if (v) {
                             Karma k = *v;
                             --(k.*val);
                             v.put(k);
-                        } 
+                        }
                     } else {
                         Karma k;
                         if (v) k = *v;

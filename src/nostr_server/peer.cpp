@@ -5,6 +5,7 @@
 
 #include "peer.h"
 
+#include <openssl/sha.h>
 #include <sstream>
 namespace nostr_server {
 
@@ -34,7 +35,10 @@ NAMED_ENUM(Command,
         EOSE,
         NOTICE,
         AUTH,
-        OK
+        OK,
+        FILE,
+        FETCH,
+        LINK
 );
 constexpr NamedEnum_Command commands={};
 
@@ -62,6 +66,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
         while (true) {
             Message msg = co_await me._stream.read();
             if (msg.type == Type::text) me.processMessage(msg.payload);
+            if (msg.type == Type::binary) me.processBinaryMessage(msg.payload);
             else if (msg.type == Type::connClose) break;
             co_await me._stream.wait_for_flush();
         }
@@ -136,6 +141,15 @@ void Peer::processMessage(std::string_view msg_text) {
             case Command::AUTH:
                 process_auth(msg[1]);
                 break;
+            case Command::FILE:
+                on_file(msg[1]);break;
+                break;
+            case Command::FETCH:
+                on_fetch(msg[1]);break;
+                break;
+            case Command::LINK:
+                on_link(msg[1]);break;
+                break;
             default: {
                 send_notice(std::string("Unknown command: ").append(cmd_text));
             }
@@ -176,10 +190,17 @@ void Peer::send_error(std::string_view id, std::string_view text) {
 }
 
 void Peer::on_event(const JSON &msg) {
+    on_event_generic(msg[1],[&](const std::string &id, Event &&event){
+        _app->publish(std::move(event), this);
+         send({commands[Command::OK], id, true, ""});
+    },false);
+}
+template<typename Fn>
+void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_events) {
     std::string id;
     try {
-        id = msg[1]["id"].as<std::string>();
-        Event event = Event::fromStructured(msg[1]);
+        id = msg["id"].as<std::string>();
+        Event event = Event::fromStructured(msg);
 //        std::string_view pubkey = event["pubkey"].as<std::string_view>();
         auto now = std::chrono::system_clock::now();
         if (!_no_limit && !_rate_limiter.test_and_add(now)) {
@@ -200,8 +221,10 @@ void Peer::on_event(const JSON &msg) {
         }
         const auto &kind = event.kind;
         if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
+            if (no_special_events) throw std::invalid_argument("This event is not allowed here");
             _app->get_publisher().publish(EventSource{std::move(event),this});
             _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
+            send({commands[Command::OK], id, true, ""});
             return;
         }
         if (!_no_limit && _options.read_only /*&& _options.replicators.find(pubkey) == _options.replicators.npos*/) {
@@ -211,8 +234,7 @@ void Peer::on_event(const JSON &msg) {
             if (!_app->check_whitelist(event.author)) {
                 if (kind == 4) {
                     auto target = event.get_tag_content("p");
-                    Event::Pubkey pk;
-                    binary_from_hex(target.begin(), target.end(), pk);
+                    auto pk = Event::Pubkey::from_hex(target);
                     if (!_app->is_home_user(pk)) throw Blocked("Target user not found");
                 } else {
                     throw Blocked("Not invited");
@@ -220,11 +242,11 @@ void Peer::on_event(const JSON &msg) {
             }
         }
         if (kind == 5) {
+            if (no_special_events) throw std::invalid_argument("This event is not allowed here");
             event_deletion(event);
             return;
         }
-       _app->publish(std::move(event), this);
-        send({commands[Command::OK], id, true, ""});
+        on_verify(id, std::move(event));
         _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
     } catch (const EventParseException &e) {
         send_error(id, std::string("invalid: ")+e.what());
@@ -334,8 +356,7 @@ void Peer::event_deletion(const Event &event) {
     bool deleted_something = false;
     std::vector<Filter> flts(1);
     auto evtodel = event.get_tag_content("e");
-    Event::ID id;
-    binary_from_hex(evtodel.begin(), evtodel.end(), id);
+    auto id = Event::ID::from_hex(evtodel);
     flts[0].ids.push_back({id, id.size()});
     auto &storage = _app->get_storage();
     docdb::Batch b;
@@ -357,7 +378,7 @@ void Peer::event_deletion(const Event &event) {
         storage.get_db()->commit_batch(b);
         _app->get_publisher().publish(EventSource{event,this});
     }
-    send({commands[Command::OK], binary_to_hexstr(event.id), true, ""});
+    send({commands[Command::OK], event.id.to_hex(), true, ""});
     _sensor.update([&](ClientSensor &szn){szn.report_kind(5);});
 }
 
@@ -424,6 +445,83 @@ void Peer::process_auth(const JSON &jevent) {
     } catch (const std::exception &e) {
         send_error(id,std::string("restricted:") + e.what());
     }
+
+}
+
+void Peer::processBinaryMessage(std::string_view msg_text) {
+    Binary<32> hash;
+    SHA256(reinterpret_cast<const unsigned char *>(msg_text.data()), msg_text.size(), hash.data());
+    auto iter = _opened_files.find(hash);
+    if (iter != _opened_files.end()) {
+        auto sz = std::strtoull(iter->second.get_tag_content("size").c_str(), nullptr, 10);
+        if (sz == msg_text.size()) {
+            auto mime = iter->second.get_tag_content("m");
+            send({commands[Command::FILE], hash.to_hex(), true, ""});
+            _app->publish_with_attachment(std::move(iter->second), {std::move(mime), std::string(msg_text)}, hash, nullptr);
+            _opened_files.erase(iter);
+            return;
+        } else {
+            send({commands[Command::FILE], hash.to_hex(), false, "file_mismatch: size"});
+        }
+    } else {
+        send({commands[Command::FILE], hash.to_hex(), false, "file_mismatch: hash"});
+    }
+}
+
+void Peer::on_file(const JSON &msg) {
+    on_event_generic(msg, [&](const std::string &id, Event &&event){
+
+        const Event::Tag *att = event.get_tag("attachment");
+        if (att == nullptr) throw std::invalid_argument("tag \"attachment\" is mandatory");
+        std::string hash = event.get_tag_content("x");
+        if (hash.empty()) throw std::invalid_argument("tag \"x\" is mandatory");
+        if (hash.size() != 64) throw std::invalid_argument("tag \"x\" has invalid value");
+        std::string mime = event.get_tag_content("m");
+        if (mime.empty()) throw std::invalid_argument("tag \"m\" is mandatory");
+        std::string size = event.get_tag_content("size");
+        if (size.empty()) throw std::invalid_argument("tag \"size\" is mandatory");
+
+        char *p;
+        std::size_t sz = std::strtoul(size.c_str(),&p,10);
+        if (p != size.data()+size.size()) throw std::invalid_argument("tag \"size\" has invalid value");
+
+        if (!sz) throw std::invalid_argument("tag \"size\" must be non-zero");
+        if (sz > _options.media_max_size) {
+            send({commands[Command::OK], id, false, "max_size: " + std::to_string(_options.media_max_size)});
+        }
+
+        auto pos = mime.find('/');
+        if (pos == mime.npos || pos == 0 || pos == mime.size()-1) {
+            throw std::invalid_argument("tag \"mime\" has invalid value");
+        }
+
+        Binary<32> binhash = Binary<32>::from_hex(hash);
+        _opened_files[binhash] = std::move(event);
+        send({commands[Command::OK], id, true, "continue"});
+    }, true);
+}
+
+void Peer::on_fetch(const JSON &msg) {
+    std::string id = msg.as<std::string>();
+    auto hash = Binary<32>::from_hex(id);
+    auto media = _app->fetch_media(hash);
+    if (media) {
+        send({commands[Command::FETCH], id, true, media->mime});
+        _stream.write({media->content, Type::binary});
+    } else {
+        send({commands[Command::FETCH], id, false, "missing: file not found"});
+    }
+}
+
+void Peer::on_link(const JSON &msg) {
+    std::string id = msg.as<std::string>();
+    auto hash = Binary<32>::from_hex(id);
+    auto link = _app->get_media_link(hash);;
+    std::string peer_url(this->_req.get_url());
+    peer_url = "http"+peer_url.substr(2);
+    if (peer_url.back() != '/') peer_url.push_back('/');
+    peer_url.append(link);
+    send({commands[Command::LINK], id, true, peer_url});
 
 }
 

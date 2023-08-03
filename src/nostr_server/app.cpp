@@ -39,6 +39,7 @@ App::App(const Config &cfg)
         ,_index_time(_storage, "time")
         ,_index_fulltext(_storage, "fulltext")
         ,_index_whitelist(_storage, "karma")
+        ,_media_storage(_db,"media")
 {
     if (cfg.metric.enable) {
         register_scavengers(*_omcoll);
@@ -86,6 +87,26 @@ void App::init_handlers(coroserver::http::Server &server) {
     });
     server.set_handler("/stats", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req){
         return me->send_simple_stats(req);
+    });
+    server.set_handler("/media", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath)->cocls::future<bool>{
+        if (req[coroserver::http::strtable::hdr_etag].has_value()) {
+            req.set_status(304);
+            co_await req.send("");
+            co_return true;
+        }
+        if (vpath.empty()) co_return false;
+        vpath = vpath.substr(1);
+        Binary<32> id = Binary<32>::from_hex(vpath);
+        auto media = me->fetch_media(id);
+        if (media) {
+            req.add_header(coroserver::http::strtable::hdr_content_type,media->mime);
+            req.add_header(coroserver::http::strtable::hdr_etag, "immutable");
+            req.caching(24*60*60*365);
+            co_await req.send(media->content);
+            co_return true;
+        } else {
+            co_return false;
+        }
     });
 }
 
@@ -163,7 +184,10 @@ docdb::DocID App::find_replacable(std::string_view pubkey, unsigned int kind, st
 
 bool App::check_whitelist(const Event::Pubkey &k)
 {
-    if (_empty_database) return true;
+    if (_empty_database) {
+        _empty_database = _index_whitelist.select_all().empty();
+        if (_empty_database) return true;
+    }
     auto r = _index_whitelist.find(k);
     if (!r) return false;
     return r->get_score() > 0;
@@ -215,7 +239,7 @@ auto fulltext_relevance_ordering(std::string_view word) {
         auto [k] = row.key.template get<std::string_view>();
         rel *= (k.length() - word.length())+1;
         return {256/rel,0};
-    };  
+    };
 }
 
 IApp::OrderingItem merge_relevance(const IApp::OrderingItem& a, const IApp::OrderingItem &b) {
@@ -298,7 +322,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                 if (calc.is_top_empty()) break;
             }
             for(const auto &[t, contents]:f.tags) {
-                calc.push(calc.empty_set());    
+                calc.push(calc.empty_set());
                 for (const auto &x: contents) {
                     std::size_t h = hasher(x);
                     docdb::Key from(t,h);
@@ -307,7 +331,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                     need_time = false;
                     calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
                             multi_index_ordering<unsigned char, std::size_t>());
-                    calc.OR(merge_relevance);                
+                    calc.OR(merge_relevance);
                 }
                 calc.AND(merge_relevance);
             }
@@ -403,10 +427,28 @@ void App::publish(Event &&event, const void *publisher)  {
     auto to_replace = doc_to_replace(event);
     if (to_replace != docdb::DocID(-1)) {
         _storage.put(event, to_replace);
-        _empty_database = false;
     }
     event_publish.publish(EventSource{std::move(event),publisher});
 }
 
+void App::publish_with_attachment(Event &&event, const MediaType &media, const Event::ID &mediaHash, const void *publisher) {
+    docdb::Batch b;
+    _media_storage.put(b, docdb::Key(mediaHash), media);
+    auto to_replace = doc_to_replace(event);
+    if (to_replace != docdb::DocID(-1)) {
+        _storage.put(b, event, to_replace);
+    }
+    _db->commit_batch(b);
+    event_publish.publish(EventSource{std::move(event),publisher});
+
+}
+
+docdb::FoundRecord<MediaDocument> App::fetch_media(const Event::ID &mediaHash) const {
+    return _media_storage.find(mediaHash);
+}
+
+std::string App::get_media_link(const Event::ID &mediaHash) const {
+    return "media/"+mediaHash.to_hex();
+}
 
 } /* namespace nostr_server */

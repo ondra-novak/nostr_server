@@ -19,6 +19,7 @@ struct ServerOptions {
     int pow = 0; //specifies count of bits for Proof of work (0 - disabled)
     int event_rate_window = 10;
     int event_rate_limit = 10;
+    std::size_t media_max_size = 256*1024;
     bool read_only;
     bool whitelisting;
     std::string replicators;

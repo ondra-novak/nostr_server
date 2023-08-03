@@ -31,13 +31,9 @@ Event Event::fromStructured(const docdb::Structured &sevent) {
     if (s_tags.defined() && !s_tags.contains<docdb::Structured::Array>()) throw EventParseException(EventParseException::field_tags);
     Event ev;
 
-    std::string_view tmp;
-    tmp = s_id.as<std::string_view>();
-    binary_from_hex(tmp.begin(), tmp.end(), ev.id);
-    tmp = s_pubkey.as<std::string_view>();
-    binary_from_hex(tmp.begin(), tmp.end(), ev.author);
-    tmp = s_sig.as<std::string_view>();
-    binary_from_hex(tmp.begin(), tmp.end(), ev.sig);
+    ev.id = Event::ID::from_hex(s_id.as<std::string_view>());
+    ev.author = Event::Pubkey::from_hex(s_pubkey.as<std::string_view>());
+    ev.sig = Event::Signature::from_hex(s_sig.as<std::string_view>());
     ev.content.append(s_content.as<std::string_view>());
     ev.created_at = s_created_at.as<std::time_t>();
     ev.kind = s_kind.as<unsigned int>();
@@ -115,14 +111,11 @@ docdb::Structured::Array build_tags(const Event &ev) {
 std::string Event::toJSON() const {
     return toStructured().to_json();
 }
-docdb::Structured Event::toStructured() const 
+docdb::Structured Event::toStructured() const
 {
-    IDHex id_str;
-    SignatureHex sig_str;
-    PubkeyHex pubkey_str;
-    binary_to_hex(id,id_str.begin());
-    binary_to_hex(sig, sig_str.begin());
-    binary_to_hex(author, pubkey_str.begin());
+    IDHex id_str = id;
+    SignatureHex sig_str = sig;
+    PubkeyHex pubkey_str = author;
     docdb::Structured ev = {
         {"content", std::string_view(content)},
         {"id", std::string(id_str.data(), id_str.size())},
@@ -137,8 +130,7 @@ docdb::Structured Event::toStructured() const
 
 Event::ID Event::calc_id() const
 {
-    Event::PubkeyHex pubkey_str;
-    binary_to_hex(author, pubkey_str.begin());
+    Event::PubkeyHex pubkey_str = author;
     docdb::Structured eventToSign = {
         0,
         std::string_view(pubkey_str.data(), pubkey_str.size()),

@@ -125,6 +125,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.options.whitelisting = options["whitelisting"].getBool(true);
     outcfg.options.replicators = options["replicators"].getString();
     outcfg.options.read_only= options["read_only"].getBool(false);
+    outcfg.options.media_max_size = options["max_file_size_kb"].getUInt(256)*1024;
 
     outcfg.private_key = replication["private_key"].getString("replicator_01");
 
@@ -174,8 +175,8 @@ public:
                                             _lg.error("[HTTP] Unknown exception");
                                         }
                                         [[fallthrough]];
-                
-                                    
+
+
             case TraceEvent::finish:{
                                         auto t = std::chrono::system_clock::now();
                                         auto dur = (t - _start_time).count();
@@ -190,7 +191,7 @@ public:
                                             r * 0.001,
                                             w * 0.001
                                         );
-                                        
+
                                     }
                                     return;
             case TraceEvent::close: _lg.info("Closed");
@@ -282,7 +283,7 @@ int main(int argc, char **argv) {
         ctx.stop();
         if (task.joinable()) task.join();
         logProgress("Server exit");
-        
+
 
     } catch (std::invalid_argument &e) {
         std::cerr << "Invalid command line: " << e.what();

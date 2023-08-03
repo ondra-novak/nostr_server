@@ -36,7 +36,7 @@ try {
             if (f) break;
         }
         if (!f) return false;
-    }    
+    }
     if (since.has_value()) {
         if (doc.created_at < *since) return false;
     }
@@ -58,17 +58,15 @@ Filter Filter::create(const JSON &f) {
         if (k == "authors") {
             const auto &a = v.array();
             for (const auto &c: a)  {
-                Event::Pubkey pk;
                 auto hx = c.as<std::string_view>();
-                binary_from_hex(hx.begin(), hx.end(), pk);
+                auto pk = Event::Pubkey::from_hex(hx);
                 out.authors.push_back({pk,std::min<unsigned char>(pk.size(),hx.size()/2)});
             }
         } else if (k == "ids") {
             const auto &a = v.array();
             for (const auto &c: a)  {
-                Event::ID id;
                 auto hx = c.as<std::string_view>();
-                binary_from_hex(hx.begin(), hx.end(), id);
+                auto id = Event::ID::from_hex(hx);
                 out.ids.push_back({id,std::min<unsigned char>(id.size(),hx.size()/2)});
             }
         } else if (k == "kinds") {

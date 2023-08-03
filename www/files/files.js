@@ -55,7 +55,7 @@ class SimpleNostrClient {
     }
 
     async sign_event(ev) {
-        var now = Math.floor( Date.now() / 1000 );
+        var now = Math.floor( Date.now() / 1000 );        
         var newevent = [
             0,
             this.#pubKeyMinus2,
@@ -67,21 +67,28 @@ class SimpleNostrClient {
         var message = JSON.stringify( newevent );
         var msghash = bitcoinjs.crypto.sha256( message ).toString( 'hex' );
         ev.id = msghash;
-        ev.pubkey = this.#pubKeyMinus2,
+        ev.pubkey = this.#pubKeyMinus2;
+        ev.created_at = now;
         ev.sig = await nobleSecp256k1.schnorr.sign( msghash, this.#privKey );
         return ev;
     }
 
     send_req(cmd, response_fn, bin) {
         bin = !!bin;
+        if (cmd instanceof Blob) {
+            console.log("Send","<binary message>", cmd.size);
+            this.#relay.send(cmd);
+        } else {
+            console.log("Send", cmd);
+            this.#relay.send(JSON.stringify(cmd));
+        }
+        if (response_fn) {
+            return this.wait(response_fn, bin);
+        }
+    }
+    
+    wait(response_fn, bin) {
         return new Promise((ok,err)=>{
-            if (cmd instanceof Blob) {
-                console.log("Send","<binary message>", cmd.size);
-                this.#relay.send(cmd);
-            } else {
-                console.log("Send", cmd);
-                this.#relay.send(JSON.stringify(cmd));
-            }
             if (response_fn) {
                 this.#listeners.push({
                     bin:bin,
@@ -92,8 +99,7 @@ class SimpleNostrClient {
             }
         });
     }
-
-
+    
     #process_msg(e) {
         let msg;
         let bin = false;
@@ -148,15 +154,16 @@ async function do_upload() {
     let size = el.files[0].size;
     let name = el.files[0].name;
     let type = el.files[0].type;
-    let event = {
+    let kind = document.getElementById("notekind").valueAsNumber;
+    let event = {    
         content:desc,
         tags:[
-            ["h", fhex],
-            ["type",type],
-            ["title",name],
+            ["x", fhex],
+            ["m",type],
+            ["attachment",name],
             ["size",""+size]
         ],
-        kind:50
+        kind:kind
     }
     event = await app.sign_event(event);
     let status = await app.send_req(["FILE", event],(msg)=>{
@@ -164,14 +171,51 @@ async function do_upload() {
         if (msg[0] == "NOTICE") return [false, msg[1]];
     });
     if (status[0]) {
-        var b = new Blob(fdata, type);
+        var b = new Blob([fdata], {type:type});
         status = await app.send_req(b,(msg)=>{
-            if (msg[0] == "OK" && msg[1] == "file:"+fhex) return [msg[2],msg[3]];
+            if (msg[0] == "FILE" && msg[1] == fhex) return [msg[2],msg[3]];
         });
         if (status[0]) alert ("upload successful");
         else alert("Upload error:" + status[1]);
     } else {
         alert("Request error:" + status[1]);
+    }
+}
+
+var imgurl;
+
+async function do_fetch() {
+    let fileid = document.getElementById("fileid").value;
+    let status = await app.send_req(["FETCH",fileid],(msg)=>{
+        if (msg[0] == "FETCH" && msg[1] == fileid) return [msg[2],msg[3]];
+    });
+    if (status[0]) {
+        if (imgurl) URL.revokeObjectURL(imgurl);
+        imgurl = null;
+        imgurl = await app.wait((msg)=>{
+            msg = new Blob([msg], { type: status[1] });
+            var url = URL.createObjectURL(msg);            
+            return url;            
+        },true);
+        let el = document.getElementById("outimage");
+        el.hidden = false;
+        el.src = imgurl;        
+    } else {        
+        alert(status[1]);
+    }
+}
+
+async function do_link() {
+    let fileid = document.getElementById("fileid").value;
+    let status = await app.send_req(["LINK",fileid],(msg)=>{
+        if (msg[0] == "LINK" && msg[1] == fileid) return [msg[2],msg[3]];
+    });
+    if (status[0]) {
+        let el = document.getElementById("filelink");
+        el.href = status[1];
+        el.textContent = status[1];
+    } else {
+        alert(status[1]);
     }
 }
 
@@ -183,4 +227,6 @@ async function start() {
     console.log("connected");
     document.getElementById("pubkey").textContent = app.get_pubkey();
     document.getElementById("doupload").addEventListener("click", do_upload);
+    document.getElementById("dofetch").addEventListener("click", do_fetch);
+    document.getElementById("dolink").addEventListener("click", do_link);
 }
