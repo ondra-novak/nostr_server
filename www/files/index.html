@@ -1,0 +1,33 @@
+<!DOCTYPE html>
+<html>
+<head>
+<script src="https://bitcoincore.tech/apps/bitcoinjs-ui/lib/bitcoinjs-lib.js"></script>
+<script src="https://bundle.run/bip39@3.0.4"></script>
+<script src="https://bundle.run/bip32@2.0.6"></script>
+<script src="https://bundle.run/buffer@6.0.3"></script>
+<script src="https://bundle.run/noble-secp256k1@1.2.14"></script>
+<script src="https://bundle.run/browserify-cipher@1.0.1"></script>
+<script src="files.js"></script>
+</head>
+<body onload="start()">
+
+<h1>File demo</h1>
+<p>Your public key is: <span id="pubkey"></span></p>
+
+<h2>Upload</h2>
+<table>
+    <tr><th>Choose file:</th><td><input type="file" size="64" id="fileobj"></td></tr>
+    <tr><th>Note kind:</th><td><input type="number" size="5" id="notekind" value="1"></td></tr>
+    <tr><th>File description:</th><td><input type="text" size="64" id="filedesc"></td></tr>
+    <tr><th></th><td><button id="doupload">Upload</button></td></tr>
+    <tr><th>Uploaded file ID:</th><td id="fileidout"></td></tr>
+</table>
+
+<h2>Download</h2>
+<table>
+    <tr><th>Enter ID (hex)</th><td><input type="text" size="64" id="fileid"></td></tr>
+    <tr><th></th><td><button id="dofetch">Fetch</button> <button id="dolink">Get link</button><a target="_blank" id="filelink"></a></td></tr>
+</table>
+<img src="" id="outimage" hidden>
+
+</body>

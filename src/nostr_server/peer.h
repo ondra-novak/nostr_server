@@ -6,6 +6,7 @@
 #include "signature.h"
 #include "config.h"
 #include "rate_limiter.h"
+#include "attachments.h"
 
 #include "telemetry_def.h"
 
@@ -13,7 +14,9 @@
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
 
-#include <array>
+#include <map>
+#include <set>
+
 
 namespace nostr_server {
 
@@ -33,8 +36,6 @@ protected:
     );
     ~Peer();
 
-
-
     coroserver::http::ServerRequest &_req;
     PApp _app;
     const ServerOptions & _options;
@@ -45,11 +46,11 @@ protected:
     std::optional<SignatureTools> _secp;
     RateLimiter _rate_limiter;
     bool _authent = false;
-    bool _hello_recv = false;
     bool _no_limit = false;
-    std::string _auth_pubkey;
-    Event _client_capabilities;
-
+    Event::Pubkey _auth_pubkey;
+    std::string _auth_nonce;
+    JSON _client_capabilities;
+    AttachmentUploadControl _attachments;
 
     Subscriptions _subscriptions;
 
@@ -57,6 +58,7 @@ protected:
 
 
     void processMessage(std::string_view msg_text);
+    void processBinaryMessage(std::string_view msg_text);
 
     cocls::suspend_point<bool> send(const docdb::Structured &msgdata);
 
@@ -64,22 +66,25 @@ protected:
     telemetry::SharedSensor<SharedStats> _shared_sensor;
 
 
-    void on_event(docdb::Structured &msg);
-    void on_req(const docdb::Structured &msg);
-    void on_count(const docdb::Structured &msg);
-    void on_close(const docdb::Structured &msg);
+    template<typename Fn>
+    void on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_events);
 
-    void event_deletion(Event &&event);
+    void on_event(const JSON &msg);
+    void on_req(const JSON &msg);
+    void on_count(const JSON &msg);
+    void on_close(const JSON &msg);
+    void on_file(const JSON &msg);
+    void on_fetch(const JSON &msg);
+    void on_link(const JSON &msg);
+
+    void event_deletion(const Event &event);
 
     template<typename Fn>
-    void filter_event(const docdb::Structured &doc, Fn fn) const;
+    void filter_event(const Event &doc, Fn fn) const;
 
     bool check_pow(std::string_view id) const;
     void prepare_auth_challenge();
-    void process_auth(const Event &msg);
-    bool check_for_auth();
-    void send_welcome();
-
+    void process_auth(const JSON &jmsg);
     void send_error(std::string_view id, std::string_view text);
     void send_notice(std::string_view text);
 };

@@ -15,7 +15,7 @@
 
 namespace nostr_server {
 
-const Event App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
+const docdb::Structured App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
 //to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
@@ -38,6 +38,8 @@ App::App(const Config &cfg)
         ,_index_kind_time(_storage, "kind_time")
         ,_index_time(_storage, "time")
         ,_index_fulltext(_storage, "fulltext")
+        ,_index_whitelist(_storage, "karma")
+        ,_index_attachments(_storage,"attachments")
 {
     if (cfg.metric.enable) {
         register_scavengers(*_omcoll);
@@ -45,7 +47,7 @@ App::App(const Config &cfg)
         _dbsensor.enable(_db);
         _storage_sensor.enable(StorageSensor{&_storage});
     }
-
+    _empty_database = _index_whitelist.select_all().empty();
 }
 
 
@@ -86,76 +88,106 @@ void App::init_handlers(coroserver::http::Server &server) {
     server.set_handler("/stats", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req){
         return me->send_simple_stats(req);
     });
+    server.set_handler("/media", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath)->cocls::future<bool>{
+        if (req[coroserver::http::strtable::hdr_etag].has_value()) {
+            req.set_status(304);
+            co_await req.send("");
+            co_return true;
+        }
+        if (vpath.empty()) co_return false;
+        vpath = vpath.substr(1);
+        Binary<32> id = Binary<32>::from_hex(vpath);
+        docdb::DocID docid = me->find_attachment(id);
+        if (docid) {
+            auto evatt = me->_storage.find(docid);
+            if (evatt && std::holds_alternative<Attachment>(evatt->document)) {
+                const Attachment &att = std::get<Attachment>(evatt->document);
+                req.add_header(coroserver::http::strtable::hdr_content_type,att.content_type);
+                req.add_header(coroserver::http::strtable::hdr_etag, "immutable");
+                req.caching(24*60*60*365);
+                co_await req.send(att.data);
+                co_return true;
+
+            }
+        }
+        co_return false;
+    });
 }
 
 
 template<typename Emit>
-void App::IndexByIdFn::operator ()(Emit emit, const Event &ev) const {
-    emit(ev["id"].as<std::string_view>(), ev["created_at"].as<std::time_t>());
+void App::IndexByIdFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+
+    emit(ev.id,ev.created_at);
+//    emit(ev["id"].as<std::string_view>(), ev["created_at"].as<std::time_t>());
 }
 
 template<typename Emit>
-void App::IndexByAuthorKindFn::operator()(Emit emit, const Event &ev) const {
-    auto kind = ev["kind"].as<unsigned int>();
+void App::IndexByAuthorKindFn::operator()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     std::string tag;
-    bool replacable_1 = (kind == 0) | (kind == 3) | ((kind >= 10000) & (kind < 20000));
-    bool replacable_2 = (kind >= 30000) & (kind < 40000);
+    bool replacable_1 = (ev.kind == 0) | (ev.kind == 3) | ((ev.kind >= 10000) & (ev.kind < 20000));
+    bool replacable_2 = (ev.kind >= 30000) & (ev.kind < 40000);
     bool replacable = replacable_1 | replacable_2;
     if  (replacable_2) {
-        auto tags = ev["tags"];
-        auto a = tags.array();
-        auto iter = std::find_if(a.begin(), a.end(), [](const docdb::Structured &x){
-            return x[0].contains<std::string_view>() && x[0].as<std::string_view>() == "d";
-        });
-        if (iter != a.end()) {
-            const auto &d = *iter;
-            tag = d[1].to_string();
-        }
+        tag = ev.get_tag_content("d");
     }
     if (replacable) {
-        auto pubkey = ev["pubkey"].as<std::string_view>();
-        auto created_at = ev["created_at"].as<std::time_t>();
-        emit(AuthorKindTagKey(pubkey, kind, tag), TimestampRowDef::Type(created_at));
+        emit(AuthorKindTagKey(ev.author, ev.kind, tag), ev.created_at);
     }
 }
 
 template<typename Emit>
-void App::IndexByPubkeyHashTimeFn::operator ()(Emit emit, const Event &ev) const {
-    std::hash<std::string_view> hasher;
-    std::size_t h = hasher(ev["pubkey"].as<std::string_view>());
-    std::time_t t = ev["created_at"].as<std::time_t>();
-    emit({h,t});
+void App::IndexByPubkeyHashTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+    emit({ev.author, ev.created_at});
 }
 
 template<typename Emit>
-void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const Event &ev) const {
+void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     std::hash<std::string_view> hasher;
-    std::time_t ct = ev["created_at"].as<std::time_t>();
-    const auto &tags = ev["tags"].array();
-    for (const auto &tag: tags) {
-        std::string_view t = tag[0].as<std::string_view>();
-        std::string_view v = tag[1].as<std::string_view>();
-        if (t.size() == 1) {
-            std::size_t h = hasher(v);
-            emit({static_cast<unsigned char>(t[0]), h, ct});
+    for (const auto &t: ev.tags) {
+        if (t.tag.size() == 1) {
+            std::size_t h = hasher(t.content);
+            emit({t.tag[0],h, ev.created_at});
         }
     }
 }
 
 template<typename Emit>
-void App::IndexKindTimeFn::operator ()(Emit emit, const Event &ev) const {
-    std::time_t ct = ev["created_at"].as<std::time_t>();
-    unsigned int kind = ev["kind"].as<unsigned int>();
-    emit({kind,ct});
+void App::IndexKindTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+    emit({ev.kind,ev.created_at});
 }
 
 template<typename Emit>
-void App::IndexTimeFn::operator ()(Emit emit, const Event &ev) const {
-    std::time_t ct = ev["created_at"].as<std::time_t>();
-    emit({ct});
+void App::IndexTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+    emit(ev.created_at);
 }
 
 
+template<typename Emit>
+void App::IndexAttachmentFn::operator()(Emit emit, const EventOrAttachment &evatt) const {
+    if (std::holds_alternative<Event>(evatt)) {
+        const Event &ev = std::get<Event>(evatt);
+        ev.for_each_tag("attachment",[&](const Event::Tag &tag) {
+            Attachment::ID attid = Attachment::ID::from_hex(tag.content);
+            emit({attid, emit.id()});
+        });
+    } else if (std::holds_alternative<Attachment>(evatt)) {
+        const Attachment &att = std::get<Attachment>(evatt);
+        emit(att.id);
+    }
+}
 
 
 docdb::DocID App::doc_to_replace(const Event &event) const {
@@ -181,6 +213,17 @@ docdb::DocID App::find_replacable(std::string_view pubkey, unsigned int kind, st
         return 0;
     }
 
+}
+
+bool App::check_whitelist(const Event::Pubkey &k) const
+{
+    if (_empty_database) {
+        _empty_database = _index_whitelist.select_all().empty();
+        if (_empty_database) return true;
+    }
+    auto r = _index_whitelist.find(k);
+    if (!r) return false;
+    return r->get_score() > 0;
 }
 
 static void append_time(const Filter &f, docdb::Key &from, docdb::Key &to) {
@@ -209,7 +252,7 @@ static constexpr IApp::OrderingItem unique_key_value_ordering(std::time_t time) 
 
 
 constexpr auto unique_index_ordering = [](const auto &row) -> IApp::OrderingItem {
-    auto [time] = row.value.value.template get<std::time_t>();
+    auto [time] = row.value.template get<std::time_t>();
     return unique_key_value_ordering(time);
 };
 
@@ -236,6 +279,16 @@ IApp::OrderingItem merge_relevance(const IApp::OrderingItem& a, const IApp::Orde
     return {std::max(a.first, b.first),std::max(a.second, b.second)};
 }
 
+template<typename Index, typename Def>
+static auto searchShortenID(const Index &idx, const Def &def) {
+    auto from = def.first;
+    auto to = def.first;
+    for (unsigned int i = def.second; i < def.first.size(); ++i) {
+        from[i] = 0;
+        to[i] = 0xFF;
+    }
+    return idx.select_between(from,to);
+}
 
 void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const {
     std::hash<std::string_view> hasher;
@@ -245,6 +298,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
 
     calc.push(calc.empty_set());
     for (const auto &f: filters) {
+        bool need_time = true;
         calc.push(calc.all_items_set());
         do {
             if (!f.ft_search.empty()) {
@@ -262,18 +316,20 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
             if (!f.ids.empty()) {
                calc.push(calc.empty_set());
                for (const auto &a: f.ids) {
-                   auto s = calc.empty_set();
-                   if (a.size() == 64) {
-                       auto row = _index_by_id.find(a);
-                       if (row) {
-                           auto [time] = row->value.get<std::time_t>();
-                           s.push_back({row->id,unique_key_value_ordering(time)});
-                       }
-                       calc.push(std::move(s));
+                   if (a.second != a.first.size()) {
+                        calc.push(searchShortenID(_index_by_id.get_snapshot(snap), a),
+                            unique_index_ordering);
+                        calc.OR(merge_relevance);
                    } else {
-                       calc.push(_index_by_id.get_snapshot(snap).select(docdb::prefix(a)),unique_index_ordering);
+                        auto s = calc.empty_set();
+                        auto row = _index_by_id.find(a.first);
+                        if (row) {
+                            auto [time] = row->value.get<std::time_t>();
+                            s.push_back({row->id,unique_key_value_ordering(time)});
+                        }
+                        calc.push(std::move(s));
+                        calc.OR(merge_relevance);
                    }
-                   calc.OR(merge_relevance);
                }
                calc.AND(merge_relevance);
                if (calc.is_top_empty()) break;
@@ -281,39 +337,36 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
             if (!f.authors.empty()) {
                 calc.push(calc.empty_set());
                 for (const auto &a: f.authors) {
-                    std::size_t h = hasher(a);
-                    docdb::Key from(h);
-                    docdb::Key to(h);
-                    append_time(f, from, to);
-                    calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to),
-                            multi_index_ordering<std::size_t>());
-                    calc.OR(merge_relevance);
+                    if (a.second != a.first.size()) {
+                        calc.push(searchShortenID(_index_pubkey_time.get_snapshot(snap), a),
+                            multi_index_ordering<Event::Pubkey>());
+                        calc.OR(merge_relevance);
+                    } else {
+                        docdb::Key from(a.first);
+                        docdb::Key to(a.first);
+                        append_time(f, from, to);
+                        need_time = false;
+                        calc.push(_index_pubkey_time.get_snapshot(snap).select_between(from, to),
+                                multi_index_ordering<std::size_t>());
+                        calc.OR(merge_relevance);
+                    }
                 }
                 calc.AND(merge_relevance);
                 if (calc.is_top_empty()) break;
             }
-            if (!f.tags.empty()) {
-                auto iter = f.tags_begin();
-                auto end = f.tags_end();
-                while (iter != end) {
-                    calc.push(calc.empty_set());
-                    auto tend = f.tags_next(iter);
-                    while (iter != tend) {
-                        char t = iter->first;
-                        std::string_view val = iter->second;
-                        std::size_t h = hasher(val);
-                        docdb::Key from(t,h);
-                        docdb::Key to(t,h);
-                        append_time(f,from, to);
-                        calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
-                                multi_index_ordering<unsigned char, std::size_t>());
-                        calc.OR(merge_relevance);
-                        ++iter;
-                    }
-                    calc.AND(merge_relevance);
-                    if (calc.is_top_empty()) break;
+            for(const auto &[t, contents]:f.tags) {
+                calc.push(calc.empty_set());
+                for (const auto &x: contents) {
+                    std::size_t h = hasher(x);
+                    docdb::Key from(t,h);
+                    docdb::Key to(t,h);
+                    append_time(f,from, to);
+                    need_time = false;
+                    calc.push(_index_tag_value_time.get_snapshot(snap).select_between(from, to),
+                            multi_index_ordering<unsigned char, std::size_t>());
+                    calc.OR(merge_relevance);
                 }
-                if (calc.is_top_empty()) break;
+                calc.AND(merge_relevance);
             }
             if (!f.kinds.empty()) {
                 calc.push(calc.empty_set());
@@ -321,19 +374,20 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
                     docdb::Key from(a);
                     docdb::Key to(a);
                     append_time(f, from, to);
+                    need_time = false;
                     calc.push(_index_kind_time.get_snapshot(snap).select_between(from, to),
                             multi_index_ordering<unsigned int>());
                     calc.OR(merge_relevance);
                 }
                 calc.AND(merge_relevance);
             }
-            if (calc.top().is_inverted() && (f.since.has_value() || f.until.has_value())) {
+            if (need_time && (f.since.has_value() || f.until.has_value())) {
                 docdb::Key from;
                 docdb::Key to;
                 append_time(f, from, to);
                 calc.push(_index_time.get_snapshot(snap).select_between(from, to),
                         multi_index_ordering<>());
-                calc.OR(merge_relevance);
+                calc.AND(merge_relevance);
             }
         } while (false);
         calc.OR(merge_relevance);
@@ -343,7 +397,7 @@ void App::find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &fi
 
 
 cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
-    Event doc = App::get_server_capabilities();
+    JSON doc = App::get_server_capabilities();
     req.add_header(coroserver::http::strtable::hdr_content_type, "application/nostr+json");
     std::string json = doc.to_json();
     return req.send(std::move(json));
@@ -352,11 +406,14 @@ cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
 
 
 template<typename Emit>
-inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) const {
-    unsigned int kind = ev["kind"].as<unsigned int>();
-    if (kind == 0 || kind == 1 || kind == 2 || kind == 30023) {
+inline void App::IndexForFulltextFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+
+    if (ev.kind == 0 || ev.kind == 1 || ev.kind == 2 || ev.kind == 30023) {
         std::vector<WordToken> tokens;
-        tokenize_text(ev["content"].as<std::string_view>(), tokens);
+        tokenize_text(ev.content, tokens);
         for (const auto &x: tokens) {
             if (x.first.size()>1) {
                 emit(x.first, x.second);
@@ -365,22 +422,22 @@ inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) con
     }
 }
 
-Event App::get_server_capabilities() const {
-    Event limitation = Event::KeyPairs();
+JSON App::get_server_capabilities() const {
+    JSON limitation = JSON::KeyPairs();
     if (_server_options.pow) {
         limitation.set("min_pow_difficulty", _server_options.pow);
     }
-    if (_server_options.auth) {
-        limitation.set("auth_required", true);
-    }
-    Event doc {
+    limitation.set("min_prefix",32);
+    limitation.set("attachment_max_size",static_cast<std::intmax_t>(_server_options.attachment_max_size));
+    limitation.set("attachment_max_count",static_cast<std::intmax_t>(_server_options.attachment_max_count));
+    JSON doc = {
         {"name", _server_desc.name},
-        {"description", _server_desc.desc},
-        {"contact", _server_desc.contact},
-        {"pubkey", _server_desc.pubkey},
+        {"description", std::string_view(_server_desc.desc)},
+        {"contact", std::string_view(_server_desc.contact)},
+        {"pubkey", std::string_view(_server_desc.pubkey)},
         {"supported_nips", &supported_nips},
-        {"software", software_url},
-        {"version", software_version},
+        {"software", std::string_view(software_url)},
+        {"version", std::string_view(software_version)},
         {"limitation", limitation}
     };
     return doc;
@@ -389,7 +446,7 @@ Event App::get_server_capabilities() const {
 cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req) {
     std::string out;
     _db->get_level_db().GetProperty("leveldb.approximate-memory-usage", &out);
-    Event ev = {
+    JSON ev = {
             {"active_connections",_clients.load(std::memory_order_relaxed)},
             {"stored_events", static_cast<std::intmax_t>(_storage.get_rev())},
             {"database_size", static_cast<std::intmax_t>(_db->get_index_size(docdb::RawKey(0), docdb::RawKey(0xFF)))},
@@ -400,7 +457,7 @@ cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req)
 
 }
 
-bool App::is_home_user(std::string_view pubkey) const {
+bool App::is_home_user(const Event::Pubkey &pubkey) const {
     auto fnd = _index_replaceable.find({pubkey, static_cast<unsigned int>(0),std::string_view()});
     return fnd;
 }
@@ -411,6 +468,32 @@ void App::publish(Event &&event, const void *publisher)  {
         _storage.put(event, to_replace);
     }
     event_publish.publish(EventSource{std::move(event),publisher});
+}
+
+IApp::AttachmentLock App::publish_attachment(Attachment &&event) {
+    //todo handle attachment locks
+    AttachmentLock lock = std::make_shared<Attachment::ID>(event.id);
+    docdb::DocID to_replace = find_attachment(event.id);
+    _storage.put(EventOrAttachment(std::move(event)), to_replace);
+    return lock;
+}
+
+docdb::DocID App::find_attachment(const Attachment::ID &id) const {
+    auto fnd = _index_attachments.find(id);
+    if (fnd) {
+        return fnd->id;
+    } else {
+        return 0;
+    }
+}
+
+std::string App::get_attachment_link(const Attachment::ID &id) const {
+    auto docid = find_attachment(id);
+    if (docid) {
+        return "media/"+id.to_hex();
+    } else {
+        return "";
+    }
 }
 
 

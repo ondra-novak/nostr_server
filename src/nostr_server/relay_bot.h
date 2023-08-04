@@ -51,7 +51,7 @@ protected:
     void process_message(std::string_view target, const Event &ev);
     void process_relaybot_command(std::string_view command, std::string_view sender);
     void process_group_command(const SignatureTools::PrivateKey &pk, std::string_view command, std::string_view sender);
-    void send_response(const SignatureTools::PrivateKey &pk, std::string_view target, std::string_view response, Event &&skelet = Event::KeyPairs());
+    void send_response(const SignatureTools::PrivateKey &pk, std::string_view target, std::string_view response, Event &&skelet);
     void process_mention(std::string_view target, const Event &ev);
 
 

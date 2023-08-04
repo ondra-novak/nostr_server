@@ -5,6 +5,7 @@
 
 #include "peer.h"
 
+#include <openssl/sha.h>
 #include <sstream>
 namespace nostr_server {
 
@@ -16,6 +17,7 @@ Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &
 ,_options(std::move(options))
 ,_subscriber(_app->get_publisher())
 ,_rate_limiter(options.event_rate_window, options.event_rate_limit)
+,_attachments(options.attachment_max_count, options.attachment_max_size)
 {
     _sensor.enable(std::move(ident), std::move(user_agent));
     _shared_sensor.enable();
@@ -35,8 +37,9 @@ NAMED_ENUM(Command,
         NOTICE,
         AUTH,
         OK,
-        HELLO,
-        WELCOME
+        ATTACH,
+        FETCH,
+        LINK
 );
 constexpr NamedEnum_Command commands={};
 
@@ -53,17 +56,18 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
     bool res =co_await Server::accept(me._stream, me._req);
     if (!res) co_return true;
 
-    me._req.log_message("Connected client: "+std::string(ua));
+    me._req.log_message("Connected client: "+std::string(ua), static_cast<int>(PeerServerity::progress));
 
     //auth is always requested, but it is not always checked
     me.prepare_auth_challenge();
-    me.send({commands[Command::AUTH], me._auth_pubkey});
+    me.send({commands[Command::AUTH], me._auth_nonce});
 
     auto listener = me.listen_publisher();
     try {
         while (true) {
             Message msg = co_await me._stream.read();
             if (msg.type == Type::text) me.processMessage(msg.payload);
+            if (msg.type == Type::binary) me.processBinaryMessage(msg.payload);
             else if (msg.type == Type::connClose) break;
             co_await me._stream.wait_for_flush();
         }
@@ -77,7 +81,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 }
 
 template<typename Fn>
-void Peer::filter_event(const docdb::Structured &doc, Fn fn) const  {
+void Peer::filter_event(const Event &doc, Fn fn) const  {
     std::lock_guard _(_mx);
     for (const auto &sbs: _subscriptions) {
         bool found = false;
@@ -98,8 +102,9 @@ cocls::future<void> Peer::listen_publisher() {
     bool nx = co_await _subscriber.next();
     while (nx) {
         const EventSource &v = _subscriber.value();
-        filter_event(v.first, [&](const std::string_view &s){
-            send({commands[Command::EVENT], s, &v.first});
+        filter_event(v.first, [&](std::string_view s){
+            JSON doc = v.first.toStructured();
+            send({commands[Command::EVENT], s, &doc});
         });
         nx = co_await _subscriber.next();
     }
@@ -108,52 +113,60 @@ cocls::future<void> Peer::listen_publisher() {
 
 
 void Peer::processMessage(std::string_view msg_text) {
-    _req.log_message([&](auto logger){
-        std::ostringstream buff;
-        buff << "Received: " << msg_text;
-        logger(buff.view());
-    });
+    try {
+        _req.log_message([&](auto logger){
+            std::ostringstream buff;
+            buff << "Received: " << msg_text;
+            logger(buff.view());
+        });
 
-    auto msg = docdb::Structured::from_json(msg_text);
-    std::string_view cmd_text = msg[0].as<std::string_view>();
+        auto msg = docdb::Structured::from_json(msg_text);
+        std::string_view cmd_text = msg[0].as<std::string_view>();
 
 
-    Command cmd = commands[cmd_text];
+        Command cmd = commands[cmd_text];
 
-    _sensor.update([&](ClientSensor &szn){
-        ++szn.command_counter;
-    });
+        _sensor.update([&](ClientSensor &szn){
+            ++szn.command_counter;
+        });
 
-    switch (cmd) {
-        case Command::EVENT:
-            if (!check_for_auth()) return;
-            on_event(msg); break;
-        case Command::REQ:
-            if (!check_for_auth()) return;
-            on_req(msg);break;
-        case Command::COUNT:
-            if (!check_for_auth()) return;
-            on_count(msg);break;
-        case Command::CLOSE:
-            if (!check_for_auth()) return;
-            on_close(msg);break;
-        case Command::HELLO:
-            _hello_recv = true;
-            _client_capabilities = msg[1];
-            if (!check_for_auth()) return;
-            send_welcome();
-            break;
-        case Command::AUTH:
-            process_auth(msg[1]);
-            break;
-        default: {
-            send_notice(std::string("Unknown command: ").append(cmd_text));
+        switch (cmd) {
+            case Command::EVENT:
+                on_event(msg); break;
+            case Command::REQ:
+                on_req(msg);break;
+            case Command::COUNT:
+                on_count(msg);break;
+            case Command::CLOSE:
+                on_close(msg);break;
+            case Command::AUTH:
+                process_auth(msg[1]);
+                break;
+            case Command::ATTACH:
+                on_file(msg[1]);break;
+                break;
+            case Command::FETCH:
+                on_fetch(msg[1]);break;
+                break;
+            case Command::LINK:
+                on_link(msg[1]);break;
+                break;
+            default: {
+                send_notice(std::string("Unknown command: ").append(cmd_text));
+            }
         }
+    } catch (std::exception &e) {
+        send_notice("error: Internal error - command ignored");
+        _req.log_message([&](auto emit){
+            std::string msg = "Peer exception:";
+            msg.append(e.what());
+            emit(msg);
+        },static_cast<int>(PeerServerity::warn));
     }
 }
 
-cocls::suspend_point<bool> Peer::send(const docdb::Structured &msgdata) {
-    std::string json = msgdata.to_json(docdb::Structured::flagUTF8);
+cocls::suspend_point<bool> Peer::send(const JSON &msgdata) {
+    std::string json = msgdata.to_json(JSON::flagUTF8);
     _req.log_message([&](auto emit){
         std::string msg = "Send: ";
         msg.append(json);
@@ -173,15 +186,23 @@ void Peer::send_error(std::string_view id, std::string_view text) {
     _sensor.update([&](ClientSensor &szn){
         szn.error_counter++;
     });
+    _req.log_message(text, static_cast<int>(PeerServerity::warn));
 
 }
 
-void Peer::on_event(docdb::Structured &msg) {
+void Peer::on_event(const JSON &msg) {
+    on_event_generic(msg[1],[&](const std::string &id, Event &&event){
+        _app->publish(std::move(event), this);
+         send({commands[Command::OK], id, true, ""});
+    },false);
+}
+template<typename Fn>
+void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_events) {
     std::string id;
     try {
-        docdb::Structured event(std::move(msg.at(1)));
-        id = event["id"].as<std::string_view>();
-        std::string_view pubkey = event["pubkey"].as<std::string_view>();
+        id = msg["id"].as<std::string>();
+        Event event = Event::fromStructured(msg);
+//        std::string_view pubkey = event["pubkey"].as<std::string_view>();
         auto now = std::chrono::system_clock::now();
         if (!_no_limit && !_rate_limiter.test_and_add(now)) {
             send_error(id,
@@ -196,48 +217,40 @@ void Peer::on_event(docdb::Structured &msg) {
         if (!_secp.has_value()) {
             _secp.emplace();
         }
-        if (!_secp->verify(event)) {
+        if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
-        auto kind = event["kind"].as<unsigned int>();
+        const auto &kind = event.kind;
         if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
+            if (no_special_events) throw std::invalid_argument("This event is not allowed here");
             _app->get_publisher().publish(EventSource{std::move(event),this});
             _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
+            send({commands[Command::OK], id, true, ""});
             return;
         }
-        if (!_no_limit && _options.read_only && _options.replicators.find(pubkey) == _options.replicators.npos) {
+        if (!_no_limit && _options.read_only /*&& _options.replicators.find(pubkey) == _options.replicators.npos*/) {
             throw Blocked("Sorry, server is in read_only mode");
         }
+        if (!_no_limit && _options.whitelisting) {
+            if (!_app->check_whitelist(event.author)) {
+                if (kind == 4) {
+                    auto target = event.get_tag_content("p");
+                    auto pk = Event::Pubkey::from_hex(target);
+                    if (!_app->is_home_user(pk)) throw Blocked("Target user not found");
+                } else {
+                    throw Blocked("Not invited");
+                }
+            }
+        }
         if (kind == 5) {
-            event_deletion(std::move(event));
+            if (no_special_events) throw std::invalid_argument("This event is not allowed here");
+            event_deletion(event);
             return;
         }
-        if (!_no_limit && !_options.foreign_relaying && _options.auth) {
-            if (pubkey != _auth_pubkey) {
-                throw Blocked("Relaying foreign events is not allowed here");
-            }
-        }
-        if (!_no_limit && _options.block_strangers) {
-            bool unblock = _app->is_home_user(pubkey);
-            if (!unblock) {
-                const Event::Array &tags = event["tags"].array();
-                for (const auto &t : tags) {
-                    std::string_view tname = t[0].as<std::string_view>();
-                    if (tname == "p") {
-                        unblock = _app->is_home_user(t[1].as<std::string_view>());
-                    } else if (tname == "delegation") {
-                        unblock = _app->is_home_user(t[1].as<std::string_view>());
-                    }
-                    if (unblock) break;
-                }
-                if (!unblock) {
-                    throw Blocked("This place is not for strangers");
-                }
-            }
-        }
-        _app->publish(std::move(event), this);
-        send({commands[Command::OK], id, true, ""});
+        on_verify(id, std::move(event));
         _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
+    } catch (const EventParseException &e) {
+        send_error(id, std::string("invalid: ")+e.what());
     } catch (const docdb::DuplicateKeyException &e) {
         _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
         send({commands[Command::OK], id, true, "duplicate:"});
@@ -287,16 +300,21 @@ void Peer::on_req(const docdb::Structured &msg) {
             if (!limit) break;
             auto doc = storage.find(cd.id);
             if (doc) {
-                const Event &ev = doc->content;
-                for (const auto &f: flts) {
-                    if (f.test(ev)) {
-                        if (!send({commands[Command::EVENT], subid, ev})) return;
-                        --limit;
-                        break;
+                const EventOrAttachment &evatt = doc->document;
+                if (std::holds_alternative<Event>(evatt)) {
+                    const Event &ev = std::get<Event>(evatt);
+                    for (const auto &f: flts) {
+                        if (f.test(ev)) {
+                            if (!send({commands[Command::EVENT], subid, ev.toStructured()})) return;
+                            --limit;
+                            break;
+                        }
                     }
+                } else{
+                    _req.log_message("ID doesn't point to event:"+std::to_string(cd.id), static_cast<int>(PeerServerity::error));
                 }
             } else {
-                _req.log_message("Event missing for ID:"+std::to_string(cd.id), 10);
+                _req.log_message("Event missing for ID:"+std::to_string(cd.id), static_cast<int>(PeerServerity::error));
             }
         }
 
@@ -340,42 +358,34 @@ void Peer::on_close(const docdb::Structured &msg) {
     });
 }
 
-void Peer::event_deletion(Event &&event) {
+void Peer::event_deletion(const Event &event) {
     bool deleted_something = false;
-    auto id = event["id"].as<std::string_view>();
-    auto pubkey = event["pubkey"].as<std::string_view>();
-    Filter flt;
-    for (const auto &item: event["tags"].array()) {
-        if (item[0].as<std::string_view>() == "e") {
-           flt.ids.push_back(item[1].as<std::string>());
-        }
-    }
+    std::vector<Filter> flts(1);
+    auto evtodel = event.get_tag_content("e");
+    auto id = Event::ID::from_hex(evtodel);
+    flts[0].ids.push_back({id, id.size()});
     auto &storage = _app->get_storage();
     docdb::Batch b;
-    if (!flt.ids.empty()) {
-        _app->find_in_index(_rscalc, {flt});
-        _rscalc.list(_app->get_storage(), [&](docdb::DocID id, const auto &, const auto &r){
-           if (r)  {
-               const Event &ev = r->content;
-               std::string p = ev["pubkey"].as<std::string>();
-              if (p != pubkey) {
-                  throw std::invalid_argument("pubkey missmatch");
-              }
+    _app->find_in_index(_rscalc, flts);
+    for(const auto &row: _rscalc.top()) {
+        auto fdoc = storage.find(row.id);
+        if (fdoc && std::holds_alternative<Event>(fdoc->document)) {
+            const Event &ev = std::get<Event>(fdoc->document);
+            if (ev.author != event.author) {
+                throw std::invalid_argument("pubkey missmatch");
+            }
               if (deleted_something) {
-                  storage.erase(b, id);
+                  storage.erase(b, row.id);
               } else {
-                  storage.put(b, event, id);
+                  storage.put(b, event, row.id);
               }
-              deleted_something = true;
-           }
-        });
+        }
     }
-
     if (deleted_something) {
         storage.get_db()->commit_batch(b);
-        _app->get_publisher().publish(EventSource{std::move(event),this});
+        _app->get_publisher().publish(EventSource{event,this});
     }
-    send({commands[Command::OK], id, true, ""});
+    send({commands[Command::OK], event.id.to_hex(), true, ""});
     _sensor.update([&](ClientSensor &szn){szn.report_kind(5);});
 }
 
@@ -399,58 +409,118 @@ bool Peer::check_pow(std::string_view id) const {
 }
 
 void Peer::prepare_auth_challenge() {
-    _auth_pubkey.clear();
+    _auth_nonce.clear();
     std::random_device rdev;
     std::default_random_engine rnd(rdev());
     std::uniform_int_distribution<int> rnum(33,126);
     for (int i = 0; i<15; i++) {
-        _auth_pubkey.push_back(rnum(rnd));
+        _auth_nonce.push_back(rnum(rnd));
     }
 }
 
-void Peer::process_auth(const Event &event) {
-    auto id = event["id"].as<std::string_view>();
+void Peer::process_auth(const JSON &jevent) {
+    auto id = jevent["id"].as<std::string_view>();
     try {
+        Event event = Event::fromStructured(jevent);
         auto now = std::chrono::system_clock::now();
         if (!_secp.has_value()) {
             _secp.emplace();
         }
-        if (!_secp->verify(event)) {
+        if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
-        auto kind = event["kind"].as<unsigned int>();
+        auto kind = event.kind;
         if (kind != 22242) {
             throw std::invalid_argument("Unsupported kind");
         }
-        auto created_at = std::chrono::system_clock::from_time_t(event["created_at"].as<std::time_t>());
+        auto created_at = std::chrono::system_clock::from_time_t(event.created_at);
         if (std::chrono::duration_cast<std::chrono::minutes>(now - created_at).count() > 10) {
             throw std::invalid_argument("Challenge expired");
         }
-        auto tags = event["tags"].array();
-        auto chiter = std::find_if(tags.begin(), tags.end(), [&](const Event &x) {
-           return x[0].as<std::string_view>() == "challenge";
-        });
-        if (chiter == tags.end() || (*chiter)[1].as<std::string_view>() != _auth_pubkey) {
+        std::string challenge = event.get_tag_content("challenge");
+        if (challenge != _auth_nonce) {
             throw std::invalid_argument("Invalid challenge");
         }
         _authent = true;
-        _auth_pubkey = event["pubkey"].as<std::string>();
-
+        _auth_pubkey = event.author;
+/*
         if (_options.replicators.find(_auth_pubkey) != _options.replicators.npos) {
             _no_limit = true;
         }
-
-        if (_hello_recv) {
-            send_welcome();
-        } else {
-            send({commands[Command::OK], id, true, "Welcome on relay!"});
-        }
+*/
+        send({commands[Command::OK], id, true, "Welcome on relay!"});
     } catch (const std::exception &e) {
         send_error(id,std::string("restricted:") + e.what());
-        if (_hello_recv) {
-            _stream.close();
+    }
+
+}
+
+void Peer::processBinaryMessage(std::string_view msg_text) {
+    AttachmentUploadControl::AttachmentMetadata status = _attachments.check_binary_message(msg_text);
+    if (status.valid) {
+        auto lock = _app->publish_attachment(Attachment{status.id, status.mime, std::string(msg_text)});
+        _attachments.attachment_published(lock);
+        _attachments.flush_events_to_publish([&](Event &ev){
+            _app->publish(std::move(ev), nullptr);
+        });
+        send({commands[Command::ATTACH], status.id.to_hex(), true, ""});
+    } else {
+        send({commands[Command::ATTACH], status.id.to_hex(), false, "invalid_attachment:"});
+    }
+
+}
+
+void Peer::on_file(const JSON &msg) {
+    on_event_generic(msg, [&](const std::string &id, Event &&event){
+
+        auto status = _attachments.register_event(std::move(event));
+        bool res = false;
+        std::string text;
+        switch (status) {
+            case AttachmentUploadControl::ok: res = true; text = "continue:";break;
+            case AttachmentUploadControl::invalid_hash: text = "invalid hash:";break;
+            case AttachmentUploadControl::invalid_mime: text = "invalid mime:";break;
+            case AttachmentUploadControl::invalid_size: text = "invalid size:";break;
+            case AttachmentUploadControl::max_size: text = "max size:" + std::to_string(_options.attachment_max_size);break;
+            case AttachmentUploadControl::max_attachments: text = "max count:" + std::to_string(_options.attachment_max_count);break;
+            default:
+            case AttachmentUploadControl::malformed: text = "malformed:";break;
+        }
+
+        send({commands[Command::OK], id, res, text});
+    }, true);
+}
+
+void Peer::on_fetch(const JSON &msg) {
+    std::string id = msg.as<std::string>();
+    auto hash = Binary<32>::from_hex(id);
+    auto docid = _app->find_attachment(hash);
+    if (docid) {
+        const auto &stor = _app->get_storage();
+        auto doc = stor.find(docid);
+        if (doc && std::holds_alternative<Attachment>(doc->document)) {
+            const Attachment &att = std::get<Attachment>(doc->document);
+            send({commands[Command::FETCH], id, true, att.content_type});
+            _stream.write({att.data, Type::binary});
+            return ;
         }
     }
+    send({commands[Command::FETCH], id, false, "missing: attachment not found"});
+}
+
+void Peer::on_link(const JSON &msg) {
+    std::string id = msg.as<std::string>();
+    auto hash = Binary<32>::from_hex(id);
+    auto link = _app->get_attachment_link(hash);;
+    if (link.empty()) {
+        send({commands[Command::LINK], id, false, "missing: attachment not found"});
+        return;
+    }
+    std::string peer_url(this->_req.get_url());
+    peer_url = "http"+peer_url.substr(2);
+    if (peer_url.back() != '/') peer_url.push_back('/');
+    peer_url.append(link);
+    send({commands[Command::LINK], id, true, peer_url});
 
 }
 
@@ -461,17 +531,5 @@ void Peer::send_notice(std::string_view text) {
     });
 }
 
-bool Peer::check_for_auth() {
-    if (!_options.auth) return true;
-    if (!_authent) {
-        send_notice("restricted: Authentication is mandatory on this relay");
-        return false;
-    }
-    return true;
-}
-
-void Peer::send_welcome() {
-    send({commands[Command::WELCOME], _app->get_server_capabilities()});
-}
 
 }

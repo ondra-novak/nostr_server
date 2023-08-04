@@ -20,7 +20,7 @@ namespace nostr_server {
 
 using DatabaseSensor = telemetry::SharedSensor<docdb::PDatabase>;
 struct StorageSensor {
-    const docdb::Storage<EventType> *storage = nullptr;
+    const docdb::Storage<EventDocument> *storage = nullptr;
 };
 
 struct ClientSensor {

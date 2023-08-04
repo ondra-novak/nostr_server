@@ -3,6 +3,7 @@
 #define SRC_NOSTR_SERVER_IAPP_H_
 #include "publisher.h"
 #include "filter.h"
+#include "media.h"
 
 #include <docdb/database.h>
 #include <docdb/storage.h>
@@ -13,27 +14,41 @@
 
 namespace nostr_server {
 
+enum class PeerServerity: int {
+    debug,
+    progress,
+    warn,
+    error
+};
+
+
+
+
 class IApp {
 public:
 
-
-
-    using DocumentType =docdb::StructuredDocument<docdb::Structured::use_string_view> ;
-
-    using AuthorKindTagKey = std::tuple<std::string_view, unsigned int, std::string_view>;
+    using AuthorKindTagKey = std::tuple<Event::Pubkey, unsigned int, std::string_view>;
     using TimestampRowDef = docdb::FixedRowDocument<std::time_t>;
     using IdHashKey = std::size_t;
 
-    using Storage = docdb::Storage<DocumentType>;
+    using Storage = docdb::Storage<EventDocument>;
     using IndexViewByAuthorKindTag = docdb::IndexView<Storage,TimestampRowDef, docdb::IndexType::unique>;
-
-
-
 
     using OrderingItem = std::pair<unsigned int, unsigned int>;
     using RecordSetCalculator = docdb::RecordsetStackT<docdb::DocID, OrderingItem>;
 
     using DocIDList = std::vector<docdb::DocID>;
+
+    ///Locks attachment temporarily
+    /** When attachment is published, there is no event associated with
+     * the attachment, so garbage collector can later discard this
+     * attachment. While is peer waiting for attachments, it can
+     * held the lock, so garbage collector will not discard locked
+     * attachments. To release lock, you can simply destroy this
+     * instance
+     *
+     */
+    using AttachmentLock = std::shared_ptr<Attachment::ID>;
 
     virtual ~IApp() = default;
     virtual EventPublisher &get_publisher() = 0;
@@ -49,10 +64,19 @@ public:
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
-    virtual Event get_server_capabilities() const = 0;
-    virtual bool is_home_user(std::string_view pubkey) const = 0;
+    virtual JSON get_server_capabilities() const = 0;
+    virtual bool is_home_user(const Event::Pubkey & pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
+    virtual bool check_whitelist(const Event::Pubkey &k) const = 0;
+    virtual AttachmentLock publish_attachment(Attachment &&event) = 0;
+    ///Finds attachment by id
+    /**
+     * @param id id to find
+     * @return docid if found, or zero if not
+     */
+    virtual docdb::DocID find_attachment(const Attachment::ID &id) const = 0;
+    virtual std::string get_attachment_link(const Event::ID &mediaHash) const = 0;
 
 };
 
