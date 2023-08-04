@@ -13,6 +13,7 @@ add_executable(nostr_server
 	filter.cpp
 	event.cpp
 	media.cpp
+	attachments.cpp
 	whitelist.cpp
 )
 

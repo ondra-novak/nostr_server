@@ -47,7 +47,10 @@ struct KarmaDocument {
 
 struct WhiteListIndexFn {
     static constexpr int revision = 4;
-    template<typename Emit> void operator ()(Emit emit, const Event &ev) const {
+    template<typename Emit> void operator ()(Emit emit, const EventOrAttachment &evatt) const {
+
+        if (!std::holds_alternative<Event>(evatt)) return;
+        const Event &ev = std::get<Event>(evatt);
 
         auto update_counter = [&](unsigned int (Karma::*val)) {
                 ev.for_each_tag("p",[&](const Event::Tag &t){

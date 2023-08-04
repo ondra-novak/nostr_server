@@ -6,6 +6,7 @@
 #include "signature.h"
 #include "config.h"
 #include "rate_limiter.h"
+#include "attachments.h"
 
 #include "telemetry_def.h"
 
@@ -13,7 +14,9 @@
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_server_request.h>
 
-#include <array>
+#include <map>
+#include <set>
+
 
 namespace nostr_server {
 
@@ -33,13 +36,6 @@ protected:
     );
     ~Peer();
 
-
-    struct HashOfHash {
-        std::size_t operator()(const Binary<32> &x) const {
-            return x[0];
-        }
-    };
-
     coroserver::http::ServerRequest &_req;
     PApp _app;
     const ServerOptions & _options;
@@ -54,8 +50,7 @@ protected:
     Event::Pubkey _auth_pubkey;
     std::string _auth_nonce;
     JSON _client_capabilities;
-    std::unordered_map<Binary<32>,Event, HashOfHash> _opened_files;
-
+    AttachmentUploadControl _attachments;
 
     Subscriptions _subscriptions;
 

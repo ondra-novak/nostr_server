@@ -39,7 +39,7 @@ App::App(const Config &cfg)
         ,_index_time(_storage, "time")
         ,_index_fulltext(_storage, "fulltext")
         ,_index_whitelist(_storage, "karma")
-        ,_media_storage(_db,"media")
+        ,_index_attachments(_storage,"attachments")
 {
     if (cfg.metric.enable) {
         register_scavengers(*_omcoll);
@@ -97,28 +97,37 @@ void App::init_handlers(coroserver::http::Server &server) {
         if (vpath.empty()) co_return false;
         vpath = vpath.substr(1);
         Binary<32> id = Binary<32>::from_hex(vpath);
-        auto media = me->fetch_media(id);
-        if (media) {
-            req.add_header(coroserver::http::strtable::hdr_content_type,media->mime);
-            req.add_header(coroserver::http::strtable::hdr_etag, "immutable");
-            req.caching(24*60*60*365);
-            co_await req.send(media->content);
-            co_return true;
-        } else {
-            co_return false;
+        docdb::DocID docid = me->find_attachment(id);
+        if (docid) {
+            auto evatt = me->_storage.find(docid);
+            if (evatt && std::holds_alternative<Attachment>(evatt->document)) {
+                const Attachment &att = std::get<Attachment>(evatt->document);
+                req.add_header(coroserver::http::strtable::hdr_content_type,att.content_type);
+                req.add_header(coroserver::http::strtable::hdr_etag, "immutable");
+                req.caching(24*60*60*365);
+                co_await req.send(att.data);
+                co_return true;
+
+            }
         }
+        co_return false;
     });
 }
 
 
 template<typename Emit>
-void App::IndexByIdFn::operator ()(Emit emit, const Event &ev) const {
+void App::IndexByIdFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+
     emit(ev.id,ev.created_at);
 //    emit(ev["id"].as<std::string_view>(), ev["created_at"].as<std::time_t>());
 }
 
 template<typename Emit>
-void App::IndexByAuthorKindFn::operator()(Emit emit, const Event &ev) const {
+void App::IndexByAuthorKindFn::operator()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     std::string tag;
     bool replacable_1 = (ev.kind == 0) | (ev.kind == 3) | ((ev.kind >= 10000) & (ev.kind < 20000));
     bool replacable_2 = (ev.kind >= 30000) & (ev.kind < 40000);
@@ -132,12 +141,16 @@ void App::IndexByAuthorKindFn::operator()(Emit emit, const Event &ev) const {
 }
 
 template<typename Emit>
-void App::IndexByPubkeyHashTimeFn::operator ()(Emit emit, const Event &ev) const {
+void App::IndexByPubkeyHashTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     emit({ev.author, ev.created_at});
 }
 
 template<typename Emit>
-void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const Event &ev) const {
+void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     std::hash<std::string_view> hasher;
     for (const auto &t: ev.tags) {
         if (t.tag.size() == 1) {
@@ -148,14 +161,34 @@ void App::IndexTagValueHashTimeFn::operator ()(Emit emit, const Event &ev) const
 }
 
 template<typename Emit>
-void App::IndexKindTimeFn::operator ()(Emit emit, const Event &ev) const {
+void App::IndexKindTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     emit({ev.kind,ev.created_at});
 }
 
 template<typename Emit>
-void App::IndexTimeFn::operator ()(Emit emit, const Event &ev) const {
+void App::IndexTimeFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
     emit(ev.created_at);
 }
+
+
+template<typename Emit>
+void App::IndexAttachmentFn::operator()(Emit emit, const EventOrAttachment &evatt) const {
+    if (std::holds_alternative<Event>(evatt)) {
+        const Event &ev = std::get<Event>(evatt);
+        ev.for_each_tag("attachment",[&](const Event::Tag &tag) {
+            Attachment::ID attid = Attachment::ID::from_hex(tag.content);
+            emit({attid, emit.id()});
+        });
+    } else if (std::holds_alternative<Attachment>(evatt)) {
+        const Attachment &att = std::get<Attachment>(evatt);
+        emit(att.id);
+    }
+}
+
 
 docdb::DocID App::doc_to_replace(const Event &event) const {
     IndexByAuthorKindFn idx;
@@ -182,7 +215,7 @@ docdb::DocID App::find_replacable(std::string_view pubkey, unsigned int kind, st
 
 }
 
-bool App::check_whitelist(const Event::Pubkey &k)
+bool App::check_whitelist(const Event::Pubkey &k) const
 {
     if (_empty_database) {
         _empty_database = _index_whitelist.select_all().empty();
@@ -373,7 +406,11 @@ cocls::future<bool> App::send_infodoc(coroserver::http::ServerRequest &req) {
 
 
 template<typename Emit>
-inline void App::IndexForFulltextFn::operator ()(Emit emit, const Event &ev) const {
+inline void App::IndexForFulltextFn::operator ()(Emit emit, const EventOrAttachment &evatt) const {
+
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+
     if (ev.kind == 0 || ev.kind == 1 || ev.kind == 2 || ev.kind == 30023) {
         std::vector<WordToken> tokens;
         tokenize_text(ev.content, tokens);
@@ -391,6 +428,8 @@ JSON App::get_server_capabilities() const {
         limitation.set("min_pow_difficulty", _server_options.pow);
     }
     limitation.set("min_prefix",32);
+    limitation.set("attachment_max_size",static_cast<std::intmax_t>(_server_options.attachment_max_size));
+    limitation.set("attachment_max_count",static_cast<std::intmax_t>(_server_options.attachment_max_count));
     JSON doc = {
         {"name", _server_desc.name},
         {"description", std::string_view(_server_desc.desc)},
@@ -431,24 +470,31 @@ void App::publish(Event &&event, const void *publisher)  {
     event_publish.publish(EventSource{std::move(event),publisher});
 }
 
-void App::publish_with_attachment(Event &&event, const MediaType &media, const Event::ID &mediaHash, const void *publisher) {
-    docdb::Batch b;
-    _media_storage.put(b, docdb::Key(mediaHash), media);
-    auto to_replace = doc_to_replace(event);
-    if (to_replace != docdb::DocID(-1)) {
-        _storage.put(b, event, to_replace);
+IApp::AttachmentLock App::publish_attachment(Attachment &&event) {
+    //todo handle attachment locks
+    AttachmentLock lock = std::make_shared<Attachment::ID>(event.id);
+    docdb::DocID to_replace = find_attachment(event.id);
+    _storage.put(EventOrAttachment(std::move(event)), to_replace);
+    return lock;
+}
+
+docdb::DocID App::find_attachment(const Attachment::ID &id) const {
+    auto fnd = _index_attachments.find(id);
+    if (fnd) {
+        return fnd->id;
+    } else {
+        return 0;
     }
-    _db->commit_batch(b);
-    event_publish.publish(EventSource{std::move(event),publisher});
-
 }
 
-docdb::FoundRecord<MediaDocument> App::fetch_media(const Event::ID &mediaHash) const {
-    return _media_storage.find(mediaHash);
+std::string App::get_attachment_link(const Attachment::ID &id) const {
+    auto docid = find_attachment(id);
+    if (docid) {
+        return "media/"+id.to_hex();
+    } else {
+        return "";
+    }
 }
 
-std::string App::get_media_link(const Event::ID &mediaHash) const {
-    return "media/"+mediaHash.to_hex();
-}
 
 } /* namespace nostr_server */

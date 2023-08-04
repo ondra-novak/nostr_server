@@ -39,6 +39,17 @@ public:
 
     using DocIDList = std::vector<docdb::DocID>;
 
+    ///Locks attachment temporarily
+    /** When attachment is published, there is no event associated with
+     * the attachment, so garbage collector can later discard this
+     * attachment. While is peer waiting for attachments, it can
+     * held the lock, so garbage collector will not discard locked
+     * attachments. To release lock, you can simply destroy this
+     * instance
+     *
+     */
+    using AttachmentLock = std::shared_ptr<Attachment::ID>;
+
     virtual ~IApp() = default;
     virtual EventPublisher &get_publisher() = 0;
     virtual Storage &get_storage() = 0;
@@ -57,10 +68,15 @@ public:
     virtual bool is_home_user(const Event::Pubkey & pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
-    virtual bool check_whitelist(const Event::Pubkey &k) = 0;
-    virtual void publish_with_attachment(Event &&event, const MediaType &media, const Event::ID &mediaHash, const void *publisher) = 0;
-    virtual docdb::FoundRecord<MediaDocument> fetch_media(const Event::ID &mediaHash) const = 0;
-    virtual std::string get_media_link(const Event::ID &mediaHash) const = 0;
+    virtual bool check_whitelist(const Event::Pubkey &k) const = 0;
+    virtual AttachmentLock publish_attachment(Attachment &&event) = 0;
+    ///Finds attachment by id
+    /**
+     * @param id id to find
+     * @return docid if found, or zero if not
+     */
+    virtual docdb::DocID find_attachment(const Attachment::ID &id) const = 0;
+    virtual std::string get_attachment_link(const Event::ID &mediaHash) const = 0;
 
 };
 

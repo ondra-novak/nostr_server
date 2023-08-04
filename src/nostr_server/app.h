@@ -43,41 +43,45 @@ public:
     virtual void client_counter(int increment) override;
     virtual void publish(Event &&ev, const void *publisher) override;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;
-    virtual bool check_whitelist(const Event::Pubkey &k) override;
-    virtual void publish_with_attachment(Event &&event, const MediaType &media, const Event::ID &mediaHash, const void *publisher) override;
-    virtual docdb::FoundRecord<MediaDocument> fetch_media(const Event::ID &mediaHash) const override;
-    virtual std::string get_media_link(const Event::ID &mediaHash) const override;
+    virtual bool check_whitelist(const Event::Pubkey &k) const override;
+    virtual AttachmentLock publish_attachment(Attachment &&event) override;
+    virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
+    virtual std::string get_attachment_link(const Attachment::ID &id) const override;
 protected:
     coroserver::http::StaticPage static_page;
 
     struct IndexByIdFn {
         static constexpr int revision = 3;
-        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator ()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexByPubkeyHashTimeFn {
         static constexpr int revision = 1;
-        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator ()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexTagValueHashTimeFn {
         static constexpr int revision = 2;
-        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator ()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexKindTimeFn {
         static constexpr int revision = 1;
-        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator ()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexTimeFn {
         static constexpr int revision = 1;
-        template<typename Emit> void operator ()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator ()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexByAuthorKindFn {
         static constexpr int revision = 2;
-        template<typename Emit> void operator()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
 
     struct IndexForFulltextFn{
         static constexpr int revision = 4;
-        template<typename Emit> void operator()(Emit emit, const Event &ev) const;
+        template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
+    };
+    struct IndexAttachmentFn {
+        static constexpr int revision = 1;
+        template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
 
 
@@ -88,6 +92,7 @@ protected:
     using IndexKindTime = docdb::Indexer<Storage,IndexKindTimeFn,docdb::IndexType::multi>;
     using IndexTime = docdb::Indexer<Storage,IndexTimeFn,docdb::IndexType::multi>;
     using IndexForFulltext = docdb::Indexer<Storage,IndexForFulltextFn,docdb::IndexType::multi>;
+    using IndexAttachments = docdb::Indexer<Storage,IndexAttachmentFn,docdb::IndexType::unique>;
 
     EventPublisher event_publish;
     docdb::PDatabase _db;
@@ -97,7 +102,7 @@ protected:
     std::shared_ptr<telemetry::open_metrics::Collector> _omcoll;
     telemetry::SharedSensor<docdb::PDatabase> _dbsensor;
     telemetry::SharedSensor<StorageSensor> _storage_sensor;
-    bool _empty_database = true;
+    mutable bool _empty_database = true;
 
     std::atomic<int> _clients = {};
 
@@ -110,7 +115,7 @@ protected:
     IndexTime _index_time;
     IndexForFulltext _index_fulltext;
     WhiteListIndex _index_whitelist;
-    MediaStorage _media_storage;
+    IndexAttachments _index_attachments;
 
 
 

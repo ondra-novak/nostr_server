@@ -159,22 +159,19 @@ async function do_upload() {
     let event = {    
         content:desc,
         tags:[
-            ["x", fhex],
-            ["m",type],
-            ["attachment",name],
-            ["size",""+size]
+            ["attachment",fhex,""+size,type]
         ],
         kind:kind
     }
     event = await app.sign_event(event);
-    let status = await app.send_req(["FILE", event],(msg)=>{
+    let status = await app.send_req(["ATTACH", event],(msg)=>{
         if (msg[0] == "OK" && msg[1]==event.id) return [msg[2],msg[3]];
         if (msg[0] == "NOTICE") return [false, msg[1]];
     });
     if (status[0]) {
         var b = new Blob([fdata], {type:type});
         status = await app.send_req(b,(msg)=>{
-            if (msg[0] == "FILE" && msg[1] == fhex) return [msg[2],msg[3]];
+            if (msg[0] == "ATTACH" && msg[1] == fhex) return [msg[2],msg[3]];
         });
         if (status[0]) alert ("upload successful");
         else alert("Upload error:" + status[1]);

@@ -77,62 +77,101 @@ struct Event {
     const Tag *find_indexed_tag(char t, std::string_view content) const;
 };
 
+struct Attachment {
+    using ID = Binary<32>;
+
+    ID id;
+    std::string content_type;
+    std::string data;
+};
+
+using EventOrAttachment = std::variant<Event, Attachment>;
+
 struct EventDocument {
     using Srl = docdb::StructuredDocument<>;
-    using Type = Event;
+    using Type = EventOrAttachment;
     template<typename Iter>
-    static Iter to_binary(const Event &ev, Iter out) {
-        *out = '\0'; //version
-        out = Srl::string_to_binary(0,ev.content,out);
-        out = Srl::uint_to_binary(0,ev.kind,out);
-        out = Srl::uint_to_binary(0,ev.created_at, out);
-        out = Srl::uint_to_binary(0,ev.tags.size(),out);
-        for(const auto &t: ev.tags) {
-            out = Srl::string_to_binary(0,t.tag,out);
-            out = Srl::string_to_binary(0,t.content,out);
-            out = Srl::uint_to_binary(0,t.additional_content.size(),out);
-            for (const auto &z: t.additional_content) {
-                out = Srl::string_to_binary(0,z,out);
+    static Iter to_binary(const EventOrAttachment &evatt, Iter out) {
+        *out = static_cast<char>(evatt.index());
+        if (std::holds_alternative<Event>(evatt)) {
+            const Event &ev = std::get<Event>(evatt);
+            out = Srl::string_to_binary(0,ev.content,out);
+            out = Srl::uint_to_binary(0,ev.kind,out);
+            out = Srl::uint_to_binary(0,ev.created_at, out);
+            out = Srl::uint_to_binary(0,ev.tags.size(),out);
+            for(const auto &t: ev.tags) {
+                out = Srl::string_to_binary(0,t.tag,out);
+                out = Srl::string_to_binary(0,t.content,out);
+                out = Srl::uint_to_binary(0,t.additional_content.size(),out);
+                for (const auto &z: t.additional_content) {
+                    out = Srl::string_to_binary(0,z,out);
+                }
             }
+            std::copy(ev.id.begin(), ev.id.end(), out);
+            std::copy(ev.author.begin(), ev.author.end(), out);
+            std::copy(ev.sig.begin(), ev.sig.end(), out);
+        } else {
+            const Attachment &att = std::get<Attachment>(evatt);
+            out = std::copy(att.id.begin(), att.id.end(), out);
+            std::string_view ctx = att.content_type;
+            ctx = ctx.substr(0,255);
+            *out++=static_cast<char>(ctx.size());
+            out = std::copy(ctx.begin(), ctx.end(), out);
+            out = std::copy(att.data.begin(), att.data.end(), out);
         }
-        std::copy(ev.id.begin(), ev.id.end(), out);
-        std::copy(ev.author.begin(), ev.author.end(), out);
-        std::copy(ev.sig.begin(), ev.sig.end(), out);
         return out;
     }
     template<typename Iter>
-    static Event from_binary(Iter &at, Iter end) {
-        Event ev;
-        get_extra(at,end);
-        auto x = get_extra(at,end);
-        ev.content = Srl::string_from_binary(x, at, end);
-        x = get_extra(at,end);
-        ev.kind = Srl::uint_from_binary(x,at,end);
-        x = get_extra(at,end);
-        ev.created_at = Srl::uint_from_binary(x,at,end);
-        x = get_extra(at,end);
-        std::size_t tag_count = Srl::uint_from_binary(x,at,end);
-        ev.tags.reserve(tag_count);
-        for (std::size_t i = 0; i < tag_count; ++i) {
-            Event::Tag t;
-            x = get_extra(at,end);
-            t.tag = Srl::string_from_binary(x, at, end);
-            x = get_extra(at,end);
-            t.content = Srl::string_from_binary(x, at, end);
-            x = get_extra(at,end);
-            std::size_t add_count = Srl::uint_from_binary(x,at,end);
-            for (std::size_t j = 0; j < add_count; ++j)  {
-                x = get_extra(at,end);
-                t.additional_content.push_back(Srl::string_from_binary(x, at, end));
+    static EventOrAttachment from_binary(Iter &at, Iter end) {
+        unsigned char ex = get_extra(at,end);
+        if (ex == 1) {
+            EventOrAttachment out{Attachment{}};
+            Attachment &att  = std::get<Attachment>(out);
+            for (std::size_t i = 0; i < att.id.size() && at != end; i++) {
+                att.id[i] = *at++;
             }
-            ev.tags.push_back(std::move(t));
+            std::size_t sz = get_extra(at, end);
+            att.content_type.resize(sz);
+            for (std::size_t i = 0; i < sz && at != end; i++) {
+                att.content_type[i] = *at++;
+            }
+            att.data.resize(std::distance(at,end));
+            std::copy(at,end,att.data.begin());
+            at = end;
+            return out;
+        } else {
+            EventOrAttachment out{Event{}};
+            Event &ev = std::get<Event>(out);
+            auto x = get_extra(at,end);
+            ev.content = Srl::string_from_binary(x, at, end);
+            x = get_extra(at,end);
+            ev.kind = Srl::uint_from_binary(x,at,end);
+            x = get_extra(at,end);
+            ev.created_at = Srl::uint_from_binary(x,at,end);
+            x = get_extra(at,end);
+            std::size_t tag_count = Srl::uint_from_binary(x,at,end);
+            ev.tags.reserve(tag_count);
+            for (std::size_t i = 0; i < tag_count; ++i) {
+                Event::Tag t;
+                x = get_extra(at,end);
+                t.tag = Srl::string_from_binary(x, at, end);
+                x = get_extra(at,end);
+                t.content = Srl::string_from_binary(x, at, end);
+                x = get_extra(at,end);
+                std::size_t add_count = Srl::uint_from_binary(x,at,end);
+                for (std::size_t j = 0; j < add_count; ++j)  {
+                    x = get_extra(at,end);
+                    t.additional_content.push_back(Srl::string_from_binary(x, at, end));
+                }
+                ev.tags.push_back(std::move(t));
+            }
+            load_bin(at, end, ev.id);
+            load_bin(at, end, ev.author);
+            load_bin(at, end, ev.sig);
+            assert(ev.calc_id() == ev.id);
+            ev.build_hash_map();
+            return out;
         }
-        load_bin(at, end, ev.id);
-        load_bin(at, end, ev.author);
-        load_bin(at, end, ev.sig);
-        assert(ev.calc_id() == ev.id);
-        ev.build_hash_map();
-        return ev;
      }
 
     template<typename Iter>

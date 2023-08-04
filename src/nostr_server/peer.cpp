@@ -17,6 +17,7 @@ Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &
 ,_options(std::move(options))
 ,_subscriber(_app->get_publisher())
 ,_rate_limiter(options.event_rate_window, options.event_rate_limit)
+,_attachments(options.attachment_max_count, options.attachment_max_size)
 {
     _sensor.enable(std::move(ident), std::move(user_agent));
     _shared_sensor.enable();
@@ -36,7 +37,7 @@ NAMED_ENUM(Command,
         NOTICE,
         AUTH,
         OK,
-        FILE,
+        ATTACH,
         FETCH,
         LINK
 );
@@ -141,7 +142,7 @@ void Peer::processMessage(std::string_view msg_text) {
             case Command::AUTH:
                 process_auth(msg[1]);
                 break;
-            case Command::FILE:
+            case Command::ATTACH:
                 on_file(msg[1]);break;
                 break;
             case Command::FETCH:
@@ -299,13 +300,18 @@ void Peer::on_req(const docdb::Structured &msg) {
             if (!limit) break;
             auto doc = storage.find(cd.id);
             if (doc) {
-                const Event &ev = doc->document;
-                for (const auto &f: flts) {
-                    if (f.test(ev)) {
-                        if (!send({commands[Command::EVENT], subid, ev.toStructured()})) return;
-                        --limit;
-                        break;
+                const EventOrAttachment &evatt = doc->document;
+                if (std::holds_alternative<Event>(evatt)) {
+                    const Event &ev = std::get<Event>(evatt);
+                    for (const auto &f: flts) {
+                        if (f.test(ev)) {
+                            if (!send({commands[Command::EVENT], subid, ev.toStructured()})) return;
+                            --limit;
+                            break;
+                        }
                     }
+                } else{
+                    _req.log_message("ID doesn't point to event:"+std::to_string(cd.id), static_cast<int>(PeerServerity::error));
                 }
             } else {
                 _req.log_message("Event missing for ID:"+std::to_string(cd.id), static_cast<int>(PeerServerity::error));
@@ -363,8 +369,9 @@ void Peer::event_deletion(const Event &event) {
     _app->find_in_index(_rscalc, flts);
     for(const auto &row: _rscalc.top()) {
         auto fdoc = storage.find(row.id);
-        if (fdoc) {
-            if (fdoc->document.author != event.author) {
+        if (fdoc && std::holds_alternative<Event>(fdoc->document)) {
+            const Event &ev = std::get<Event>(fdoc->document);
+            if (ev.author != event.author) {
                 throw std::invalid_argument("pubkey missmatch");
             }
               if (deleted_something) {
@@ -449,74 +456,66 @@ void Peer::process_auth(const JSON &jevent) {
 }
 
 void Peer::processBinaryMessage(std::string_view msg_text) {
-    Binary<32> hash;
-    SHA256(reinterpret_cast<const unsigned char *>(msg_text.data()), msg_text.size(), hash.data());
-    auto iter = _opened_files.find(hash);
-    if (iter != _opened_files.end()) {
-        auto sz = std::strtoull(iter->second.get_tag_content("size").c_str(), nullptr, 10);
-        if (sz == msg_text.size()) {
-            auto mime = iter->second.get_tag_content("m");
-            send({commands[Command::FILE], hash.to_hex(), true, ""});
-            _app->publish_with_attachment(std::move(iter->second), {std::move(mime), std::string(msg_text)}, hash, nullptr);
-            _opened_files.erase(iter);
-            return;
-        } else {
-            send({commands[Command::FILE], hash.to_hex(), false, "file_mismatch: size"});
-        }
+    AttachmentUploadControl::AttachmentMetadata status = _attachments.check_binary_message(msg_text);
+    if (status.valid) {
+        auto lock = _app->publish_attachment(Attachment{status.id, status.mime, std::string(msg_text)});
+        _attachments.attachment_published(lock);
+        _attachments.flush_events_to_publish([&](Event &ev){
+            _app->publish(std::move(ev), nullptr);
+        });
+        send({commands[Command::ATTACH], status.id.to_hex(), true, ""});
     } else {
-        send({commands[Command::FILE], hash.to_hex(), false, "file_mismatch: hash"});
+        send({commands[Command::ATTACH], status.id.to_hex(), false, "invalid_attachment:"});
     }
+
 }
 
 void Peer::on_file(const JSON &msg) {
     on_event_generic(msg, [&](const std::string &id, Event &&event){
 
-        const Event::Tag *att = event.get_tag("attachment");
-        if (att == nullptr) throw std::invalid_argument("tag \"attachment\" is mandatory");
-        std::string hash = event.get_tag_content("x");
-        if (hash.empty()) throw std::invalid_argument("tag \"x\" is mandatory");
-        if (hash.size() != 64) throw std::invalid_argument("tag \"x\" has invalid value");
-        std::string mime = event.get_tag_content("m");
-        if (mime.empty()) throw std::invalid_argument("tag \"m\" is mandatory");
-        std::string size = event.get_tag_content("size");
-        if (size.empty()) throw std::invalid_argument("tag \"size\" is mandatory");
-
-        char *p;
-        std::size_t sz = std::strtoul(size.c_str(),&p,10);
-        if (p != size.data()+size.size()) throw std::invalid_argument("tag \"size\" has invalid value");
-
-        if (!sz) throw std::invalid_argument("tag \"size\" must be non-zero");
-        if (sz > _options.media_max_size) {
-            send({commands[Command::OK], id, false, "max_size: " + std::to_string(_options.media_max_size)});
+        auto status = _attachments.register_event(std::move(event));
+        bool res = false;
+        std::string text;
+        switch (status) {
+            case AttachmentUploadControl::ok: res = true; text = "continue:";break;
+            case AttachmentUploadControl::invalid_hash: text = "invalid hash:";break;
+            case AttachmentUploadControl::invalid_mime: text = "invalid mime:";break;
+            case AttachmentUploadControl::invalid_size: text = "invalid size:";break;
+            case AttachmentUploadControl::max_size: text = "max size:" + std::to_string(_options.attachment_max_size);break;
+            case AttachmentUploadControl::max_attachments: text = "max count:" + std::to_string(_options.attachment_max_count);break;
+            default:
+            case AttachmentUploadControl::malformed: text = "malformed:";break;
         }
 
-        auto pos = mime.find('/');
-        if (pos == mime.npos || pos == 0 || pos == mime.size()-1) {
-            throw std::invalid_argument("tag \"mime\" has invalid value");
-        }
-
-        Binary<32> binhash = Binary<32>::from_hex(hash);
-        _opened_files[binhash] = std::move(event);
-        send({commands[Command::OK], id, true, "continue"});
+        send({commands[Command::OK], id, res, text});
     }, true);
 }
 
 void Peer::on_fetch(const JSON &msg) {
     std::string id = msg.as<std::string>();
     auto hash = Binary<32>::from_hex(id);
-    auto media = _app->fetch_media(hash);
-    if (media) {
-        send({commands[Command::FETCH], id, true, media->mime});
-        _stream.write({media->content, Type::binary});
-    } else {
-        send({commands[Command::FETCH], id, false, "missing: file not found"});
+    auto docid = _app->find_attachment(hash);
+    if (docid) {
+        const auto &stor = _app->get_storage();
+        auto doc = stor.find(docid);
+        if (doc && std::holds_alternative<Attachment>(doc->document)) {
+            const Attachment &att = std::get<Attachment>(doc->document);
+            send({commands[Command::FETCH], id, true, att.content_type});
+            _stream.write({att.data, Type::binary});
+            return ;
+        }
     }
+    send({commands[Command::FETCH], id, false, "missing: attachment not found"});
 }
 
 void Peer::on_link(const JSON &msg) {
     std::string id = msg.as<std::string>();
     auto hash = Binary<32>::from_hex(id);
-    auto link = _app->get_media_link(hash);;
+    auto link = _app->get_attachment_link(hash);;
+    if (link.empty()) {
+        send({commands[Command::LINK], id, false, "missing: attachment not found"});
+        return;
+    }
     std::string peer_url(this->_req.get_url());
     peer_url = "http"+peer_url.substr(2);
     if (peer_url.back() != '/') peer_url.push_back('/');
