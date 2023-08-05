@@ -15,7 +15,10 @@
 #include <coroserver/http_server.h>
 #include <coroserver/websocket_stream.h>
 #include <coroserver/http_static_page.h>
+#include <shared/logOutput.h>
+#include <stop_token>
 #include <memory>
+#include <thread>
 
 namespace nostr_server {
 
@@ -81,7 +84,7 @@ protected:
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexAttachmentFn {
-        static constexpr int revision = 1;
+        static constexpr int revision = 2;
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
 
@@ -124,6 +127,12 @@ protected:
 
     cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
     cocls::future<bool> send_simple_stats(coroserver::http::ServerRequest &req);
+    std::size_t run_attachment_gc(ondra_shared::LogObject &lg, std::stop_token stp);
+    void start_gc_thread();
+
+    std::jthread _gc_thread;
+    std::atomic<bool> _gc_running = {false};
+
 
 
 

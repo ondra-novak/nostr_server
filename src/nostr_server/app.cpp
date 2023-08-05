@@ -12,6 +12,7 @@
 #include <coroserver/http_ws_server.h>
 #include <docdb/json.h>
 #include <sstream>
+#include <shared/logOutput.h>
 
 namespace nostr_server {
 
@@ -182,11 +183,11 @@ void App::IndexAttachmentFn::operator()(Emit emit, const EventOrAttachment &evat
         const Event &ev = std::get<Event>(evatt);
         ev.for_each_tag("attachment",[&](const Event::Tag &tag) {
             Attachment::ID attid = Attachment::ID::from_hex(tag.content);
-            emit({attid, emit.id()});
+            emit({attid, emit.id()},true);
         });
     } else if (std::holds_alternative<Attachment>(evatt)) {
         const Attachment &att = std::get<Attachment>(evatt);
-        emit(att.id);
+        emit(att.id, false);
     }
 }
 
@@ -469,6 +470,8 @@ void App::publish(Event &&event, const void *publisher)  {
         _storage.put(event, to_replace);
     }
     event_publish.publish(EventSource{std::move(event),publisher});
+
+    if (to_replace) start_gc_thread();
 }
 
 AttachmentLock App::publish_attachment(Attachment &&event) {
@@ -514,6 +517,48 @@ App::Storage::TransactionObserver App::autocompact() {
         }
     };
 }
+
+std::size_t App::run_attachment_gc(ondra_shared::LogObject &lg, std::stop_token stp) {
+    std::vector<Attachment::ID> killthem;
+    for (const auto &row: _index_attachments.select_all()) {
+        if (stp.stop_requested()) break;
+        auto [id] = row.key.get<Attachment::ID>();
+        auto [state] = row.value.get<bool>();
+        if (!state) {
+            killthem.push_back(id);
+        } else if (!killthem.empty() && killthem.back() == id) {
+            killthem.pop_back();
+        }
+    }
+    for (const auto &k: killthem) {
+        if (stp.stop_requested()) break;
+        lg.debug("Deleting attachment: $1", k.to_hex());
+        auto fnd = _index_attachments.find(k);
+        if (fnd) {
+            _storage.erase(fnd->id);
+        }
+    }
+    return killthem.size();
+}
+
+void App::start_gc_thread() {
+    if (_gc_running.exchange(true,std::memory_order_relaxed) == false) {
+        if (_gc_thread.joinable()) _gc_thread.join();
+        _gc_thread = std::jthread([&](std::stop_token stp){
+            ondra_shared::LogObject lg("GC");
+            try {
+                auto s = run_attachment_gc(lg, stp);
+                lg.progress("Done $1 attachment(s) collected", s);
+            } catch(std::exception &e) {
+                lg.error("$1", e.what());
+            } catch(...) {
+                lg.error("unknown exception");
+            }
+            _gc_running.store(false, std::memory_order_relaxed);
+        });
+    }
+}
+
 
 
 } /* namespace nostr_server */
