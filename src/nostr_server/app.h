@@ -39,6 +39,7 @@ public:
     virtual EventPublisher &get_publisher() override {return event_publish;}
     virtual Storage &get_storage() override {return _storage;}
     virtual docdb::DocID doc_to_replace(const Event &event) const override;
+    virtual docdb::DocID find_event_by_id(const Event::ID &id) const override;
     virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const override ;
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual JSON get_server_capabilities() const override;

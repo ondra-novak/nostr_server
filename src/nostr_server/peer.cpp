@@ -202,6 +202,10 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
     try {
         id = msg["id"].as<std::string>();
         Event event = Event::fromStructured(msg);
+        if (_app->find_event_by_id(event.id)) {
+            send({commands[Command::OK], id, true, "duplicate: ok"});
+            return;
+        }
 //        std::string_view pubkey = event["pubkey"].as<std::string_view>();
         auto now = std::chrono::system_clock::now();
         if (!_no_limit && !_rate_limiter.test_and_add(now)) {
@@ -455,15 +459,25 @@ void Peer::process_auth(const JSON &jevent) {
 
 }
 
+void Peer::on_attachment_published(AttachmentLock lk) {
+    if (_attachments.attachment_published(lk)) {
+        bool complete = false;
+        _attachments.flush_events_to_publish([&](Event &ev){
+            _app->publish(std::move(ev), nullptr);
+            complete = true;
+        });
+        send({commands[Command::ATTACH], lk->to_hex(), true, complete?"complete":"continue"});
+    } else {
+        send({commands[Command::ATTACH], lk->to_hex(), false, "invalid: mismatch"});
+    }
+
+}
+
 void Peer::processBinaryMessage(std::string_view msg_text) {
     AttachmentUploadControl::AttachmentMetadata status = _attachments.check_binary_message(msg_text);
     if (status.valid) {
         auto lock = _app->publish_attachment(Attachment{status.id, status.mime, std::string(msg_text)});
-        _attachments.attachment_published(lock);
-        _attachments.flush_events_to_publish([&](Event &ev){
-            _app->publish(std::move(ev), nullptr);
-        });
-        send({commands[Command::ATTACH], status.id.to_hex(), true, ""});
+        on_attachment_published(lock);
     } else {
         send({commands[Command::ATTACH], status.id.to_hex(), false, "invalid: mismatch:"});
     }
@@ -498,14 +512,7 @@ void Peer::on_fetch(const JSON &msg) {
     if (cmd == commands[Command::ATTACH]) {
         auto lk = _app->lock_attachment(hash);
         if (lk) {
-            if (_attachments.attachment_published(lk)) {
-                _attachments.flush_events_to_publish([&](Event &ev){
-                    _app->publish(std::move(ev), nullptr);
-                });
-                send({commands[Command::ATTACH], id, true, ""});
-            } else {
-                send({commands[Command::ATTACH], id, false, "invalid: mismatch"});
-            }
+            on_attachment_published(lk);
         } else {
             send({commands[Command::ATTACH], id, false, "missing: attachment not found"});
         }

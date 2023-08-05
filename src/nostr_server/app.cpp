@@ -475,7 +475,6 @@ void App::publish(Event &&event, const void *publisher)  {
 }
 
 AttachmentLock App::publish_attachment(Attachment &&event) {
-    //todo handle attachment locks
     AttachmentLock lock = _att_lock.lock(event.id);
     docdb::DocID to_replace = find_attachment(event.id);
     _storage.put(EventOrAttachment(std::move(event)), to_replace);
@@ -540,6 +539,12 @@ std::size_t App::run_attachment_gc(ondra_shared::LogObject &lg, std::stop_token 
         }
     }
     return killthem.size();
+}
+
+docdb::DocID App::find_event_by_id(const Event::ID &id) const {
+    auto r = _index_by_id.find(id);
+    if (r) return r->id;
+    else return 0;
 }
 
 void App::start_gc_thread() {

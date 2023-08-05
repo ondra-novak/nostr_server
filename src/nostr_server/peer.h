@@ -87,6 +87,7 @@ protected:
     void process_auth(const JSON &jmsg);
     void send_error(std::string_view id, std::string_view text);
     void send_notice(std::string_view text);
+    void on_attachment_published(AttachmentLock att);
 };
 
 }

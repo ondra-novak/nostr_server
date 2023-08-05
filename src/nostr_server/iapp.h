@@ -52,6 +52,7 @@ public:
      * @return candidates
      */
     virtual void find_in_index(RecordSetCalculator &calc, const std::vector<Filter> &filters) const = 0;
+    virtual docdb::DocID find_event_by_id(const Event::ID &id) const = 0;
     virtual docdb::DocID doc_to_replace(const Event &event) const = 0;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const = 0;
     virtual docdb::PDatabase get_database() const = 0;
