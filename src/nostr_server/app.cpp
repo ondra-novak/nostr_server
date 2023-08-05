@@ -41,6 +41,7 @@ App::App(const Config &cfg)
         ,_index_whitelist(_storage, "karma")
         ,_index_attachments(_storage,"attachments")
 {
+    _storage.register_transaction_observer(autocompact());
     if (cfg.metric.enable) {
         register_scavengers(*_omcoll);
         _omcoll->make_active();
@@ -494,6 +495,15 @@ std::string App::get_attachment_link(const Attachment::ID &id) const {
     } else {
         return "";
     }
+}
+
+App::Storage::TransactionObserver App::autocompact() {
+    docdb::KeyspaceID kid = _storage.get_kid();
+    return [kid](docdb::Batch &b, const Storage::Update &up) {
+        if (up.old_doc) {
+            b.Delete(docdb::RawKey(kid,up.old_doc_id));
+        }
+    };
 }
 
 

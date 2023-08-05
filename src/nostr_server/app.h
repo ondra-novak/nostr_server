@@ -118,6 +118,7 @@ protected:
     IndexAttachments _index_attachments;
 
 
+    Storage::TransactionObserver autocompact();
 
 
     cocls::future<bool> send_infodoc(coroserver::http::ServerRequest &req);
