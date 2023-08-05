@@ -94,7 +94,6 @@ The protocol flow is designed in such a way that it is possible to post other co
    
 ```
 
-**NOTE** client can open multiple ATTACH requests
 
 **NOTE** If the relay does not support this NIP, it will not be able to respond to the new command, or it will respond with "NOTICE". If the relay does not respond to the command within a certain time (e.g. 10 seconds), then the client should verify that the relay responds to other commands (for example "REQ") and evaluate the situation as if the relay does not support the functionality. If the relay responds to the command with a "NOTICE" response, the client must assume that the relay does not support the function and try another method
 
@@ -295,3 +294,23 @@ Just as I can place anything from tags using #[index], I can reference an attach
 
 This is related to the garbage collection requirement. It could happen that the client uploads attachments, but before publishing the event, the garbage collector comes and because the new attachments don't have a reference, it deletes them
 
+**Může klient zahájít více požadavků ATTACH současně (tedy bez dokončení předchozího)?**
+
+Tato situace není definovaná. Pro zjednodušení předpokládejme, že ne, tedy že nový příkaz "ATTACH" v rámci stejného spojení zruší platnost předchozího příkazu "ATTACH", pokud event tohoto příkazu nebyl dokončen a publikován. Lze případně o tom diskutovat.
+
+**Proč musí klient explicitně linkovat existující attachmenty na nový event (FETCH+ATTACH), nestačilo by, aby relay toto provedla automaticky, když vidí, že některé attachmenty jsou již na relay přítomné?**
+
+Bylo by to možné, ale výrazně to zesložití protocol flow. Klient totiž ví, kolik attachmentů musí odeslat. Pokud by relay některé attachmenty doplnila automaticky, musela by tuto skutečnost klientovi sdělit. Zřejmě pomocí odpovědi na ATTACH.
+
+Toto ale stejně neřeší situace kdy může dojít k souběhu, kdy se stejný attachment objeví na relay před dokončení požadavku. Proto je lepší, když správu attachmentů řeší klient a relay se v tomto případě chová pasivně.
+
+**Jak se řeší zaslání duplicitního eventu s attachmentem přes příkaz ATTACH?**
+
+Zaslání duplicitního eventu není považováno za chybu. V takovém případě klient stejně provede upload všech attachmentů. Nicméně relay může do odpovědi na ATTACH vložit status "duplicate", čímž dá klientovi najevo, že posílá duplicitní event a klient tedy nemusí pokračovat v posílání attachmentů.
+
+```
+client: ["ATTACH", <event>]
+relay:  ["OK","<event-id">,true,"duplicate"]
+```
+
+I v tomto případě je relay připravena přijmout binární obsah pro tento event.

@@ -64,11 +64,15 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
 
     auto listener = me.listen_publisher();
     try {
-        while (true) {
+        bool rep = true;
+        while (rep) {
             Message msg = co_await me._stream.read();
-            if (msg.type == Type::text) me.processMessage(msg.payload);
-            if (msg.type == Type::binary) me.processBinaryMessage(msg.payload);
-            else if (msg.type == Type::connClose) break;
+            switch (msg.type) {
+                case Type::text:me.processMessage(msg.payload);break;
+                case Type::binary:me.processBinaryMessage(msg.payload);break;
+                case Type::connClose: rep = false; continue;
+                default: break;
+            }
             co_await me._stream.wait_for_flush();
         }
     } catch (...) {
@@ -462,18 +466,24 @@ void Peer::process_auth(const JSON &jevent) {
 
 void Peer::on_attachment_published(AttachmentLock lk) {
         if (_attachments.attachment_published(lk)) {
+            bool duplicate = true;
             bool complete = false;
             _attachments.flush_events_to_publish([&](Event &ev){
                 try {
+                    if (_app->find_event_by_id(ev.id)) {
+                        _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
+                        return;
+                    }
                     _app->publish(std::move(ev), nullptr);
                     complete = true;
+                    duplicate = false;
                 } catch (const docdb::DuplicateKeyException &e) {
                     _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
                 } catch (const std::exception &e) {
                     send_notice(std::string("internal_error:").append(e.what()));
                 }
             });
-            send({commands[Command::ATTACH], lk->to_hex(), true, complete?"complete":"continue"});
+            send({commands[Command::ATTACH], lk->to_hex(), true, complete?(duplicate?"duplicate":"complete"):"continue"});
         } else {
             send({commands[Command::ATTACH], lk->to_hex(), false, "invalid: mismatch"});
         }
@@ -497,7 +507,9 @@ void Peer::on_attach(const JSON &msg) {
         bool res = false;
         std::string text;
         switch (status) {
-            case AttachmentUploadControl::ok: res = true;break;
+            case AttachmentUploadControl::ok: res = true;
+                    if (_app->find_event_by_id(event.id)) text = "duplicate:";
+                    break;
             case AttachmentUploadControl::invalid_hash: text = "invalid: invalid hash";break;
             case AttachmentUploadControl::invalid_mime: text = "invalid: invalid mime";break;
             case AttachmentUploadControl::invalid_size: text = "invalid: invalid size";break;
