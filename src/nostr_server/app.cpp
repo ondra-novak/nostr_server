@@ -428,8 +428,8 @@ JSON App::get_server_capabilities() const {
         limitation.set("min_pow_difficulty", _server_options.pow);
     }
     limitation.set("min_prefix",32);
-    limitation.set("attachment_max_size",static_cast<std::intmax_t>(_server_options.attachment_max_size));
-    limitation.set("attachment_max_count",static_cast<std::intmax_t>(_server_options.attachment_max_count));
+    limitation.set("max_attachment_size",static_cast<std::intmax_t>(_server_options.attachment_max_size));
+    limitation.set("max_attachment_count",static_cast<std::intmax_t>(_server_options.attachment_max_count));
     JSON doc = {
         {"name", _server_desc.name},
         {"description", std::string_view(_server_desc.desc)},
