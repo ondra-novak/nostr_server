@@ -73,7 +73,7 @@ protected:
     void on_req(const JSON &msg);
     void on_count(const JSON &msg);
     void on_close(const JSON &msg);
-    void on_file(const JSON &msg);
+    void on_attach(const JSON &msg);
     void on_fetch(const JSON &msg);
     void on_link(const JSON &msg);
 

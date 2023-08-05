@@ -5,6 +5,8 @@
 #include "filter.h"
 #include "media.h"
 
+
+
 #include <docdb/database.h>
 #include <docdb/storage.h>
 #include <docdb/indexer.h>
@@ -39,17 +41,6 @@ public:
 
     using DocIDList = std::vector<docdb::DocID>;
 
-    ///Locks attachment temporarily
-    /** When attachment is published, there is no event associated with
-     * the attachment, so garbage collector can later discard this
-     * attachment. While is peer waiting for attachments, it can
-     * held the lock, so garbage collector will not discard locked
-     * attachments. To release lock, you can simply destroy this
-     * instance
-     *
-     */
-    using AttachmentLock = std::shared_ptr<Attachment::ID>;
-
     virtual ~IApp() = default;
     virtual EventPublisher &get_publisher() = 0;
     virtual Storage &get_storage() = 0;
@@ -76,6 +67,7 @@ public:
      * @return docid if found, or zero if not
      */
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const = 0;
+    virtual AttachmentLock lock_attachment(const Attachment::ID &id) const = 0;
     virtual std::string get_attachment_link(const Event::ID &mediaHash) const = 0;
 
 };

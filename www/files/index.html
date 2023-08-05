@@ -16,16 +16,18 @@
 
 <h2>Upload</h2>
 <table>
-    <tr><th>Choose file:</th><td><input type="file" size="64" id="fileobj"></td></tr>
     <tr><th>Note kind:</th><td><input type="number" size="5" id="notekind" value="1"></td></tr>
-    <tr><th>File description:</th><td><input type="text" size="64" id="filedesc"></td></tr>
+    <tr><th>Content:</th><td><input type="text" size="64" id="filedesc"></td></tr>
+    <tr><th>Choose file:</th><td><input type="file" size="64" id="fileobj"></td></tr>
     <tr><th></th><td><button id="doupload">Upload</button></td></tr>
     <tr><th>Uploaded file ID:</th><td id="fileidout"></td></tr>
+    <tr><th></th><td><button id="post_reuse">POST + Reuse attachment</button></td></tr>
+    
 </table>
 
 <h2>Download</h2>
 <table>
-    <tr><th>Enter ID (hex)</th><td><input type="text" size="64" id="fileid"></td></tr>
+    <tr><th>Attachment ID (hex)</th><td><input type="text" size="64" id="fileid"></td></tr>
     <tr><th></th><td><button id="dofetch">Fetch</button> <button id="dolink">Get link</button><a target="_blank" id="filelink"></a></td></tr>
 </table>
 <img src="" id="outimage" hidden>

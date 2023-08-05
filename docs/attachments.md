@@ -24,14 +24,27 @@ New tag "attachment"
 The proposal introduces a new tag  "attachment" with the following format
 
 ```
-["attachment","hash_hex","size_in_bytes","mime_type","optional(dimensions)","optional(blurhash)"]
+["attachment","hash_hex","size_in_bytes","mime_type","features1", "feature2", ....]
 ```
 
 * **hash_hex** - hexadecimal representation of SHA256 hash of the attached binary file. This string also serves as **attachment-id**
 * **size_in_bytes** - size of the attachment in bytes
 * **mime_type** - mime type of the attachment 
-* **dimensions** - dimensions as defined in NIP-94, optional. 
-* **blurhash** - NIP-94 blurhash, optional
+* **features...** - optional fields with various features in format `<field>=<value>`
+    * **blurhash=** - contains NIP-94 blurhash
+    * **purpose=** - purpose of the attachment in context of current note. This can help client
+to select optimal rendering. Suggested purposes
+        * **thumbnail** - thubnail image of a following video
+        * **story** - all attachments marked by this purpose are played as a story
+        * **inline** - attachment is rendered in text, referenced by `#[<index>]`. This purpose hides this attachment from the list of attachments in note's detail.
+
+```
+["attachment","12887...","64000","image/jpeg","blurhash=qwdjq3...", "purpose=thumbnail"]
+["attachment","874788...","2258147","video/mpeg4", "purpose=story"]
+["attachment","ae3c758...","2158799","video/mpeg4", "purpose=story"]
+["attachment","788eq78...","254123","image/jpeg", "purpose=story"]
+```
+        
 
 * One event can have more than one of these tags, then it carries more attachments.
 * Each relay defines the maximum attachment size and also the maximum number of attachments within an event
@@ -62,7 +75,7 @@ relay:  ["ATTACH",<attachment-id>, true, ""]
      //event is published
 ```
 
-The protocol flow is designed in such a way that it is possible to post other commands between individual phases. Possible implementation on relay:
+The protocol flow is designed in such a way that it is possible to post other commands between individual phases. Possible implementation on a relay:
 
 ```
 - on ATTACH command
@@ -87,23 +100,38 @@ The protocol flow is designed in such a way that it is possible to post other co
 
 Errors - ATTACH
 -----------------------------
-```
-relay:  ["OK","<event-id">,false,"error code: description"]
-```
 When an error occurs after an ATTACH command, the client must not send any binary messages
 
-* **max_attachment_size: <number>** - one of the attachments exceeded the maximum size allowed, the relay sends this limit as a number in the error description section
-* **max_attachment_count: <number>** - the number of attachments has exceeded the allowed limit. Again, the relay sends this limit as a number in the error description section
-* **invalid: ** - event is malformed, missing mandatory fields, or event doesn't have attachments
+```
+relay:  ["OK","<event-id">,false,"max_attachment_size: <number>"]
+```
+
+one of the attachments exceeded the maximum size allowed, the relay sends this limit as a number in the error description section
+
+```
+relay:  ["OK","<event-id">,false,"max_attachment_count: <number>"]
+```
+
+the number of attachments has exceeded the allowed limit. Again, the relay sends this limit as a number in the error description section
+
+
+```
+relay:  ["OK","<event-id">,false,"invalid: <description>"]
+```
+
+event is malformed, missing mandatory fields, or event doesn't have attachments
+
 
 Errors- binary messages
 --------------------------------------
-```
-relay:  ["ATTACH","<attachment-id">,false,"error code: description"]
-```
+
 Relay must respond to each binary message with a ["ATTACH"] response. The response has the same format as "OK"
 
-* **invalid: mismatch** -  The sent binary message doesn't match any expected attachment. For example, the hash or size doesn't match.
+```
+relay:  ["ATTACH","<attachment-id">,false,"invalud: mismatch"]
+```
+
+The sent binary message doesn't match any expected attachment. For example, the hash or size doesn't match.
 
 
 Encryption - kind:4
@@ -115,8 +143,8 @@ Attachments are sent encrypted for "kind:4". The same encryption is used as in t
 [IV 16 bytes][ encrypted content ]
 ```
 
-Download attachment
--------------------
+Download 
+--------
 
 The "FETCH" command is used to download the attachment from the relay
 
@@ -140,6 +168,34 @@ In this case, the relay must not generate a binary message
 Encrypted attachments must be decrypted at client side.
 
 
+Reuse existing attachment
+-------------------------
+
+To avoid reupload of the same file, you can use special form of FETCH command to 
+attach existing attachment to a new event. This can be useful for long articles in case that user just posts an update of the article.
+
+```
+client: ["FETCH","<attachment-id>","ATTACH"]
+relay: ["ATTACH","<attachment-id>",true,""]
+```
+
+in case that attachment doesn't exists
+
+```
+client: ["FETCH","<attachment-id>","ATTACH"]
+relay: ["ATTACH","<attachment-id>",false,"missing: not found"]
+```
+
+in case that attachment doesn't match to any expected attachment
+
+```
+client: ["FETCH","<attachment-id>","ATTACH"]
+relay: ["ATTACH","<attachment-id>",false,"invalid: mismatch"]
+```
+
+This command also "locks" the attachment in order to prevent to be scarped by a garbage collector (see below)
+
+
 Changes in relay information document (NIP-11)
 -----------------------------------------------
 
@@ -155,10 +211,11 @@ New items are added in the "limitation" section
 * **max_attachment_count** - maximum count of attachments per event
 * **max_attachment_size** -- maximum size of single attachment in bytes
 
+
 Garbage collecting
 ------------------
 
-Relay should perform garbage collecting of attachments without any reference on events.
+Relay should perform garbage collecting of attachments without any reference on events. 
 
 
 FAQ

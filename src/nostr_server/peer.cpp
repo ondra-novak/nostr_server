@@ -143,13 +143,13 @@ void Peer::processMessage(std::string_view msg_text) {
                 process_auth(msg[1]);
                 break;
             case Command::ATTACH:
-                on_file(msg[1]);break;
+                on_attach(msg);break;
                 break;
             case Command::FETCH:
-                on_fetch(msg[1]);break;
+                on_fetch(msg);break;
                 break;
             case Command::LINK:
-                on_link(msg[1]);break;
+                on_link(msg);break;
                 break;
             default: {
                 send_notice(std::string("Unknown command: ").append(cmd_text));
@@ -470,8 +470,8 @@ void Peer::processBinaryMessage(std::string_view msg_text) {
 
 }
 
-void Peer::on_file(const JSON &msg) {
-    on_event_generic(msg, [&](const std::string &id, Event &&event){
+void Peer::on_attach(const JSON &msg) {
+    on_event_generic(msg[1], [&](const std::string &id, Event &&event){
 
         auto status = _attachments.register_event(std::move(event));
         bool res = false;
@@ -492,24 +492,41 @@ void Peer::on_file(const JSON &msg) {
 }
 
 void Peer::on_fetch(const JSON &msg) {
-    std::string id = msg.as<std::string>();
+    std::string id = msg[1].as<std::string>();
+    std::string cmd = msg[2].to_string();
     auto hash = Binary<32>::from_hex(id);
-    auto docid = _app->find_attachment(hash);
-    if (docid) {
-        const auto &stor = _app->get_storage();
-        auto doc = stor.find(docid);
-        if (doc && std::holds_alternative<Attachment>(doc->document)) {
-            const Attachment &att = std::get<Attachment>(doc->document);
-            send({commands[Command::FETCH], id, true, att.content_type});
-            _stream.write({att.data, Type::binary});
-            return ;
+    if (cmd == commands[Command::ATTACH]) {
+        auto lk = _app->lock_attachment(hash);
+        if (lk) {
+            if (_attachments.attachment_published(lk)) {
+                _attachments.flush_events_to_publish([&](Event &ev){
+                    _app->publish(std::move(ev), nullptr);
+                });
+                send({commands[Command::ATTACH], id, true, ""});
+            } else {
+                send({commands[Command::ATTACH], id, false, "invalid: mismatch"});
+            }
+        } else {
+            send({commands[Command::ATTACH], id, false, "missing: attachment not found"});
         }
+    } else {
+        auto docid = _app->find_attachment(hash);
+        if (docid) {
+            const auto &stor = _app->get_storage();
+            auto doc = stor.find(docid);
+            if (doc && std::holds_alternative<Attachment>(doc->document)) {
+                const Attachment &att = std::get<Attachment>(doc->document);
+                send({commands[Command::FETCH], id, true, att.content_type});
+                _stream.write({att.data, Type::binary});
+                return ;
+            }
+        }
+        send({commands[Command::FETCH], id, false, "missing: attachment not found"});
     }
-    send({commands[Command::FETCH], id, false, "missing: attachment not found"});
 }
 
 void Peer::on_link(const JSON &msg) {
-    std::string id = msg.as<std::string>();
+    std::string id = msg[1].as<std::string>();
     auto hash = Binary<32>::from_hex(id);
     auto link = _app->get_attachment_link(hash);;
     if (link.empty()) {

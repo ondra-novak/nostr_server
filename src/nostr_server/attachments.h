@@ -10,8 +10,6 @@
 namespace nostr_server {
 
 
-using AttachmentLock = std::shared_ptr<Attachment::ID>;
-using AttachmentWeakLock = std::weak_ptr<Attachment::ID>;
 
 class AttachmentUploadControl {
 public:
@@ -36,7 +34,7 @@ public:
 
     Status register_event(Event &&ev);
     AttachmentMetadata check_binary_message(std::string_view msg) const;
-    void attachment_published(const AttachmentLock &lock);
+    bool attachment_published(const AttachmentLock &lock);
 
     template<typename Fn>
     void flush_events_to_publish(Fn &&fn);

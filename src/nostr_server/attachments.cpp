@@ -59,10 +59,13 @@ AttachmentUploadControl::AttachmentMetadata AttachmentUploadControl::check_binar
 
 }
 
-void AttachmentUploadControl::attachment_published(const AttachmentLock &lock) {
+bool AttachmentUploadControl::attachment_published(const AttachmentLock &lock) {
     auto iter = _attmap.find({lock->data(), lock->size()});
     if (iter != _attmap.end()) {
         iter->second->lock = lock;
+        return true;
+    } else {
+        return false;
     }
 
 }

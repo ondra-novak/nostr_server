@@ -219,6 +219,10 @@ protected:
     mutable std::string msg;
 };
 
+using AttachmentLock = std::shared_ptr<Attachment::ID>;
+using AttachmentWeakLock = std::weak_ptr<Attachment::ID>;
+
+
 #if 0
 
 template<typename Iter, std::size_t sz>

@@ -471,12 +471,21 @@ void App::publish(Event &&event, const void *publisher)  {
     event_publish.publish(EventSource{std::move(event),publisher});
 }
 
-IApp::AttachmentLock App::publish_attachment(Attachment &&event) {
+AttachmentLock App::publish_attachment(Attachment &&event) {
     //todo handle attachment locks
     AttachmentLock lock = std::make_shared<Attachment::ID>(event.id);
     docdb::DocID to_replace = find_attachment(event.id);
     _storage.put(EventOrAttachment(std::move(event)), to_replace);
     return lock;
+}
+
+AttachmentLock App::lock_attachment(const Attachment::ID &id) const {
+    if (find_attachment(id)) {
+        AttachmentLock lock = std::make_shared<Attachment::ID>(id);
+        return lock;
+    } else  {
+        return {};
+    }
 }
 
 docdb::DocID App::find_attachment(const Attachment::ID &id) const {

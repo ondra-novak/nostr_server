@@ -47,6 +47,7 @@ public:
     virtual AttachmentLock publish_attachment(Attachment &&event) override;
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
     virtual std::string get_attachment_link(const Attachment::ID &id) const override;
+    virtual AttachmentLock lock_attachment(const Attachment::ID &id) const override;
 protected:
     coroserver::http::StaticPage static_page;
 

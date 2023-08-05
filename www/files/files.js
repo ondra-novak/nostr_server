@@ -180,6 +180,41 @@ async function do_upload() {
     }
 }
 
+async function do_post_reuse() {
+    let el = document.getElementById("fileobj");
+    let fdata = await getAsByteArray(el.files[0]);
+    let fhex = bitcoinjs.crypto.sha256(fdata).toString("hex");
+    document.getElementById("fileidout").textContent = fhex;
+    let desc = document.getElementById("filedesc").value;
+    let size = el.files[0].size;
+    let name = el.files[0].name;
+    let type = el.files[0].type;
+    type = type?type:"application/octet-stream";
+    let kind = document.getElementById("notekind").valueAsNumber;
+    let event = {    
+        content:desc,
+        tags:[
+            ["attachment",fhex,""+size,type]
+        ],
+        kind:kind
+    }
+    event = await app.sign_event(event);
+    let status = await app.send_req(["ATTACH", event],(msg)=>{
+        if (msg[0] == "OK" && msg[1]==event.id) return [msg[2],msg[3]];
+        if (msg[0] == "NOTICE") return [false, msg[1]];
+    });
+    if (status[0]) {
+        status = await app.send_req(["FETCH",fhex,"ATTACH"],(msg)=>{
+            if (msg[0] == "ATTACH" && msg[1] == fhex) return [msg[2],msg[3]];
+        });
+        if (status[0]) alert ("Post successful");
+        else alert("Upload error:" + status[1]);
+    } else {
+        alert("Request error:" + status[1]);
+    }
+}
+
+
 var imgurl;
 
 async function do_fetch() {
@@ -225,6 +260,7 @@ async function start() {
     console.log("connected");
     document.getElementById("pubkey").textContent = app.get_pubkey();
     document.getElementById("doupload").addEventListener("click", do_upload);
+    document.getElementById("post_reuse").addEventListener("click", do_post_reuse);
     document.getElementById("dofetch").addEventListener("click", do_fetch);
     document.getElementById("dolink").addEventListener("click", do_link);
 }
