@@ -202,8 +202,9 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
     try {
         id = msg["id"].as<std::string>();
         Event event = Event::fromStructured(msg);
-        if (_app->find_event_by_id(event.id)) {
+        if (_app->find_event_by_id(event.id) && !no_special_events) {
             send({commands[Command::OK], id, true, "duplicate: ok"});
+            _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
             return;
         }
 //        std::string_view pubkey = event["pubkey"].as<std::string_view>();
@@ -460,17 +461,22 @@ void Peer::process_auth(const JSON &jevent) {
 }
 
 void Peer::on_attachment_published(AttachmentLock lk) {
-    if (_attachments.attachment_published(lk)) {
-        bool complete = false;
-        _attachments.flush_events_to_publish([&](Event &ev){
-            _app->publish(std::move(ev), nullptr);
-            complete = true;
-        });
-        send({commands[Command::ATTACH], lk->to_hex(), true, complete?"complete":"continue"});
-    } else {
-        send({commands[Command::ATTACH], lk->to_hex(), false, "invalid: mismatch"});
-    }
-
+        if (_attachments.attachment_published(lk)) {
+            bool complete = false;
+            _attachments.flush_events_to_publish([&](Event &ev){
+                try {
+                    _app->publish(std::move(ev), nullptr);
+                    complete = true;
+                } catch (const docdb::DuplicateKeyException &e) {
+                    _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
+                } catch (const std::exception &e) {
+                    send_notice(std::string("internal_error:").append(e.what()));
+                }
+            });
+            send({commands[Command::ATTACH], lk->to_hex(), true, complete?"complete":"continue"});
+        } else {
+            send({commands[Command::ATTACH], lk->to_hex(), false, "invalid: mismatch"});
+        }
 }
 
 void Peer::processBinaryMessage(std::string_view msg_text) {
