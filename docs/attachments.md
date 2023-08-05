@@ -276,7 +276,7 @@ This client can't see the attachments, only the `content` of the event
 
 **What if two clients upload the same attachment (how to resolve hash collisions)**
 
-The proposal assumes that collisions of hashes with different content will not occur. If someone succeeds, then they are very lucky. In general, a relay can overwrite a file under the same hash if it is uploaded multiple times, or alternatively, it can keep the original file and discard the new upload (and act as if the upload was successful)
+Same hash = same content. The file is stored only once. The relay can discard duplicate content
 
 **In this NIP, the files are not signed, it is not possible to verify who sent them to the relay. NIP-95, on the other hand, also signs the file**
 

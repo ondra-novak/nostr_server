@@ -508,7 +508,8 @@ void Peer::on_attach(const JSON &msg) {
         std::string text;
         switch (status) {
             case AttachmentUploadControl::ok: res = true;
-                    if (_app->find_event_by_id(event.id)) text = "duplicate:";
+                    if (_app->find_event_by_id(event.id)) text = "duplicate";
+                    else text = "continue";
                     break;
             case AttachmentUploadControl::invalid_hash: text = "invalid: invalid hash";break;
             case AttachmentUploadControl::invalid_mime: text = "invalid: invalid mime";break;
