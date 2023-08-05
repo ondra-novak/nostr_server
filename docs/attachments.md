@@ -13,12 +13,10 @@ Key Takeaways
 
 * Replaces all previous attempts to implement file sharing in NOSTR such a NIP-95 and NIP-96
 * It's addresses requests for encrypted files in private messages
-* Defines new commands at the protocol level ("ATTACH","FETCH","LINK")
+* Defines new commands at the protocol level ("ATTACH","FETCH")
 * Defines a new tag "attachment"
 * Uses the binary messages in the websocket connection
 * This is an optional extension, the client can easily find out, that relay doesn't support this NIP
-
-
 
 
 New tag "attachment"
@@ -64,13 +62,28 @@ relay:  ["ATTACH",<attachment-id>, true, ""]
      //event is published
 ```
 
-If the relay does not support this NIP, it will not be able to respond to the new command, or it will respond with "NOTICE". If the relay does not respond to the command within a certain time (e.g. 10 seconds), then the client should verify that the relay responds to other commands (for example "REQ") and evaluate the situation as if the relay does not support the functionality. If the relay responds to the command with a "NOTICE" response, the client must assume that the relay does not support the function and try another method
+The protocol flow is designed in such a way that it is possible to post other commands between individual phases. Possible implementation on relay:
 
-The protocol flow is designed in such a way that it is possible to post other commands between individual phases. In general, the relay should respond to a binary message by calculating its SHA256 hash and checking whether there is an open request to add an event with an attachment.
+```
+- on ATTACH command
+   - validate the event
+   - store the event in a temporary storage associated with current connection
 
-* **when ATTACH command is received on the relay** - check validity of the event, prepare to receive attacahment (prepare metadata)
-* **when binary message is received on the relay** - calculate hash, find prepared metadata for the attachment, if all attachments are stored, publish the event.
-* **when connection is closed before completion** - discard any prepared metadata and delete already stored attachments
+- on binary message
+   - calculate SHA256 hash of the binary message
+   - find matching attachment in list of attachment of events stored in the temporary storage
+   - store the binary message as new attachment in the temporary storage
+   - check if all attachments have been uploaded
+        - is so, publish the stored event and attachments and delete them from temporary storage
+
+ - on connection closed before completion
+   - destroy temporary storage (no publish)
+   
+```
+
+**NOTE** client can open multiple ATTACH requests
+
+**NOTE** If the relay does not support this NIP, it will not be able to respond to the new command, or it will respond with "NOTICE". If the relay does not respond to the command within a certain time (e.g. 10 seconds), then the client should verify that the relay responds to other commands (for example "REQ") and evaluate the situation as if the relay does not support the functionality. If the relay responds to the command with a "NOTICE" response, the client must assume that the relay does not support the function and try another method
 
 Errors - ATTACH
 -----------------------------
@@ -79,9 +92,9 @@ relay:  ["OK","<event-id">,false,"error code: description"]
 ```
 When an error occurs after an ATTACH command, the client must not send any binary messages
 
-* **max size: <number>** - one of the attachments exceeded the maximum size allowed, the relay sends this limit as a number in the error description section
-* **max count: <number>** - the number of attachments has exceeded the allowed limit. Again, the relay sends this limit as a number in the error description section
-* **malformed: ** - event is malformed, missing mandatory fields, or event doesn't have attachments
+* **max_attachment_size: <number>** - one of the attachments exceeded the maximum size allowed, the relay sends this limit as a number in the error description section
+* **max_attachment_count: <number>** - the number of attachments has exceeded the allowed limit. Again, the relay sends this limit as a number in the error description section
+* **invalid: ** - event is malformed, missing mandatory fields, or event doesn't have attachments
 
 Errors- binary messages
 --------------------------------------
@@ -90,7 +103,7 @@ relay:  ["ATTACH","<attachment-id">,false,"error code: description"]
 ```
 Relay must respond to each binary message with a ["ATTACH"] response. The response has the same format as "OK"
 
-* **invalid_attachment:** -  The sent binary message doesn't match any expected attachment. For example, the hash or size doesn't match.
+* **invalid: mismatch** -  The sent binary message doesn't match any expected attachment. For example, the hash or size doesn't match.
 
 
 Encryption - kind:4
@@ -127,24 +140,6 @@ In this case, the relay must not generate a binary message
 Encrypted attachments must be decrypted at client side.
 
 
-Getting the URL for the attachment (optional)
-----------------------------------
-
-If it is more convenient for the client to have an URL to the given attachment available instead of processing the binary message, then it can use the LINK command
-
-```
-client: ["LINK","<attachment-id>"]
-relay:  ["LINK","<attachment-id>",true,"https://...."]
-```
-
-If the attachment does not exist, the response looks like this
-
-```
-client: ["LINK","<attachment-id>"]
-relay:  ["LINK","<attachment-id>", false, "missing: not found"]
-```
-
-
 Changes in relay information document (NIP-11)
 -----------------------------------------------
 
@@ -152,13 +147,13 @@ New items are added in the "limitation" section
 
 ```
  "limitation": {
-    "attachment_max_count": 4,
-    "attachment_max_size": 262144,
+    "max_attachment_count": 4,
+    "max_attachment_size": 262144,
   }
 ```
 
-* **attachment_max_count** - maximum count of attachments per event
-* **attachment_max_size** -- maximum size of single attachment in bytes
+* **max_attachment_count** - maximum count of attachments per event
+* **max_attachment_size** -- maximum size of single attachment in bytes
 
 Garbage collecting
 ------------------

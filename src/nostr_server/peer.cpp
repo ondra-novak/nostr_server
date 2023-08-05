@@ -465,7 +465,7 @@ void Peer::processBinaryMessage(std::string_view msg_text) {
         });
         send({commands[Command::ATTACH], status.id.to_hex(), true, ""});
     } else {
-        send({commands[Command::ATTACH], status.id.to_hex(), false, "invalid_attachment:"});
+        send({commands[Command::ATTACH], status.id.to_hex(), false, "invalid: mismatch:"});
     }
 
 }
@@ -477,14 +477,14 @@ void Peer::on_file(const JSON &msg) {
         bool res = false;
         std::string text;
         switch (status) {
-            case AttachmentUploadControl::ok: res = true; text = "continue:";break;
-            case AttachmentUploadControl::invalid_hash: text = "invalid hash:";break;
-            case AttachmentUploadControl::invalid_mime: text = "invalid mime:";break;
-            case AttachmentUploadControl::invalid_size: text = "invalid size:";break;
-            case AttachmentUploadControl::max_size: text = "max size:" + std::to_string(_options.attachment_max_size);break;
-            case AttachmentUploadControl::max_attachments: text = "max count:" + std::to_string(_options.attachment_max_count);break;
+            case AttachmentUploadControl::ok: res = true;break;
+            case AttachmentUploadControl::invalid_hash: text = "invalid: invalid hash";break;
+            case AttachmentUploadControl::invalid_mime: text = "invalid: invalid mime";break;
+            case AttachmentUploadControl::invalid_size: text = "invalid: invalid size";break;
+            case AttachmentUploadControl::max_size: text = "max_attachment_size:" + std::to_string(_options.attachment_max_size);break;
+            case AttachmentUploadControl::max_attachments: text = "max_attachment_count:" + std::to_string(_options.attachment_max_count);break;
             default:
-            case AttachmentUploadControl::malformed: text = "malformed:";break;
+            case AttachmentUploadControl::malformed: text = "invalid: malformed";break;
         }
 
         send({commands[Command::OK], id, res, text});
