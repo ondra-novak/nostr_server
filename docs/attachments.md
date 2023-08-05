@@ -65,13 +65,13 @@ For this reason, a new command is introduced: "ATTACH"
 client: ["ATTACH", <event>]
 relay:  ["OK","<event-id">,true,"continue"]
 client: <binary message for first attachment>
-relay:  ["ATTACH",<attachment-id>, true, ""]
+relay:  ["ATTACH",<attachment-id>, true, "continue"]
 client: <binary message for second attachment>
-relay:  ["ATTACH",<attachment-id>, true, ""]
+relay:  ["ATTACH",<attachment-id>, true, "continue"]
 ...
 ...
 client: <binary message for last attachment>
-relay:  ["ATTACH",<attachment-id>, true, ""]
+relay:  ["ATTACH",<attachment-id>, true, "complete"]
      //event is published
 ```
 
@@ -98,9 +98,14 @@ The protocol flow is designed in such a way that it is possible to post other co
 
 **NOTE** If the relay does not support this NIP, it will not be able to respond to the new command, or it will respond with "NOTICE". If the relay does not respond to the command within a certain time (e.g. 10 seconds), then the client should verify that the relay responds to other commands (for example "REQ") and evaluate the situation as if the relay does not support the functionality. If the relay responds to the command with a "NOTICE" response, the client must assume that the relay does not support the function and try another method
 
+Response - ATTACH
+--------------------------------------
+
+Response for ATTACH is similar as response to EVENT. It uses "OK" response.
+
 Errors - ATTACH
 -----------------------------
-When an error occurs after an ATTACH command, the client must not send any binary messages
+When an error occurs after an ATTACH command, the client must not send any binary messages in this case.
 
 ```
 relay:  ["OK","<event-id">,false,"max_attachment_size: <number>"]
@@ -122,13 +127,32 @@ relay:  ["OK","<event-id">,false,"invalid: <description>"]
 event is malformed, missing mandatory fields, or event doesn't have attachments
 
 
-Errors- binary messages
+Response - binary messages
 --------------------------------------
 
 Relay must respond to each binary message with a ["ATTACH"] response. The response has the same format as "OK"
 
+awaiting more attachments
+
 ```
-relay:  ["ATTACH","<attachment-id">,false,"invalud: mismatch"]
+relay:  ["ATTACH","<attachment-id">,true,"continue"]
+```
+
+event has been posted
+
+```
+relay:  ["ATTACH","<attachment-id">,true,"complete"]
+```
+
+**NOTE** keywords `continue` and `complete` are optional. They are intended for debugging purposes. Clients should not rely on them. The client always knows, how many attachments have to be send to publish the event.
+
+
+
+Errors - binary messages
+--------------------------------------
+
+```
+relay:  ["ATTACH","<attachment-id">,false,"invalid: mismatch"]
 ```
 
 The sent binary message doesn't match any expected attachment. For example, the hash or size doesn't match.
@@ -176,7 +200,7 @@ attach existing attachment to a new event. This can be useful for long articles 
 
 ```
 client: ["FETCH","<attachment-id>","ATTACH"]
-relay: ["ATTACH","<attachment-id>",true,""]
+relay: ["ATTACH","<attachment-id>",true,"continue/complete"]
 ```
 
 in case that attachment doesn't exists

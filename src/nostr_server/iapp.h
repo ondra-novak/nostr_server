@@ -67,7 +67,7 @@ public:
      * @return docid if found, or zero if not
      */
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const = 0;
-    virtual AttachmentLock lock_attachment(const Attachment::ID &id) const = 0;
+    virtual AttachmentLock lock_attachment(const Attachment::ID &id) = 0;
     virtual std::string get_attachment_link(const Event::ID &mediaHash) const = 0;
 
 };

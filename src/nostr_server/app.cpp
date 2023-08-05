@@ -476,15 +476,15 @@ void App::publish(Event &&event, const void *publisher)  {
 
 AttachmentLock App::publish_attachment(Attachment &&event) {
     //todo handle attachment locks
-    AttachmentLock lock = std::make_shared<Attachment::ID>(event.id);
+    AttachmentLock lock = _att_lock.lock(event.id);
     docdb::DocID to_replace = find_attachment(event.id);
     _storage.put(EventOrAttachment(std::move(event)), to_replace);
     return lock;
 }
 
-AttachmentLock App::lock_attachment(const Attachment::ID &id) const {
+AttachmentLock App::lock_attachment(const Attachment::ID &id)  {
     if (find_attachment(id)) {
-        AttachmentLock lock = std::make_shared<Attachment::ID>(id);
+        AttachmentLock lock = _att_lock.lock(id);
         return lock;
     } else  {
         return {};
@@ -532,6 +532,7 @@ std::size_t App::run_attachment_gc(ondra_shared::LogObject &lg, std::stop_token 
     }
     for (const auto &k: killthem) {
         if (stp.stop_requested()) break;
+        if (_att_lock.is_locked(k)) continue;
         lg.debug("Deleting attachment: $1", k.to_hex());
         auto fnd = _index_attachments.find(k);
         if (fnd) {
@@ -559,6 +560,35 @@ void App::start_gc_thread() {
     }
 }
 
+AttachmentLock App::AttLock::lock(const Attachment::ID &id) {
+    std::lock_guard _(_mx);
+    AttachmentLock fnd;
+    auto iter = std::remove_if(_lock_map.begin(), _lock_map.end(), [&](const AttachmentWeakLock &x){
+        AttachmentLock l = x.lock();
+        if (l && *l == id) fnd = l;
+        return l == nullptr;
+    });
+    _lock_map.erase(iter, _lock_map.end());
+    if (!fnd) {
+        fnd = std::make_shared<Attachment::ID>(id);
+        _lock_map.push_back(fnd);
+    }
+    return fnd;
+}
+
+bool App::AttLock::is_locked(const Attachment::ID &id) {
+    std::lock_guard _(_mx);
+    bool locked = false;
+    auto iter = std::remove_if(_lock_map.begin(), _lock_map.end(), [&](const AttachmentWeakLock &x){
+        AttachmentLock l = x.lock();
+        if (l && *l == id) locked = true;
+        return l == nullptr;
+    });
+    _lock_map.erase(iter, _lock_map.end());
+    return locked;
+}
+
 
 
 } /* namespace nostr_server */
+

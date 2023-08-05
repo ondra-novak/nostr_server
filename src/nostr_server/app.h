@@ -50,7 +50,7 @@ public:
     virtual AttachmentLock publish_attachment(Attachment &&event) override;
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
     virtual std::string get_attachment_link(const Attachment::ID &id) const override;
-    virtual AttachmentLock lock_attachment(const Attachment::ID &id) const override;
+    virtual AttachmentLock lock_attachment(const Attachment::ID &id)  override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -84,7 +84,7 @@ protected:
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexAttachmentFn {
-        static constexpr int revision = 2;
+        static constexpr int revision = 3;
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
 
@@ -133,6 +133,14 @@ protected:
     std::jthread _gc_thread;
     std::atomic<bool> _gc_running = {false};
 
+    struct AttLock {
+        std::mutex _mx;
+        std::vector<AttachmentWeakLock> _lock_map;
+        AttachmentLock lock(const Attachment::ID &id);
+        bool is_locked(const Attachment::ID &id);
+    };
+
+    AttLock _att_lock;
 
 
 
