@@ -24,6 +24,23 @@ class SimpleNostrClient {
         this.#relay = new WebSocket(relay);        
         this.#connect_promise = new Promise(connect_future);
         this.#relay.onclose = reconnect_fn;
+        this.wait(msg=>{
+            if (msg[0] == "AUTH") {
+                let event = {
+                    content: "",
+                    kind: 22242,
+                    tags: [
+                        ["relay", relay],
+                        ["challenge", msg[1]],
+                        ["user_agent", "nostr_server demo client"],
+                        ["supported_nips","1,42,97"]
+                    ]
+                }   
+                this.sign_event(event).then(e=>{
+                    this.send_req(["AUTH", e]);
+                });   
+            }
+        });
     
     }
 
@@ -91,7 +108,7 @@ class SimpleNostrClient {
         return new Promise((ok,err)=>{
             if (response_fn) {
                 this.#listeners.push({
-                    bin:bin,
+                    bin:!!bin,
                     fn:response_fn,
                     ok:ok,
                     err:err
