@@ -9,6 +9,17 @@ Experimental standalone NOSTR relay for testing, extending - it uses LevelDB as 
 **In development!!!**
 
 
+## Requirement
+
+* Linux (compiled on ubuntu/debian)
+* GCC (g++) 12+. clang 14+
+* libsecp256k1
+* libleveldb
+* libreadline
+* libunac1
+* libssl
+* pkg_config
+
 ## Technologies and libraries involved
 
 * **leveldb** - database backend - you don't need to configure external database

@@ -1,4 +1,4 @@
-#include "nostr_server.h"
+
 
 #include "config.h"
 #include "app.h"

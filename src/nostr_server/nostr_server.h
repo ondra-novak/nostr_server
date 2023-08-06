@@ -1,5 +1,0 @@
-#pragma once
-#ifndef _nostr_server_src_nostr_server_H_S3tmaA4eDaO6erjGNp3r9dBfJaoPIKSa_
-#define _nostr_server_src_nostr_server_H_S3tmaA4eDaO6erjGNp3r9dBfJaoPIKSa_
-
-#endif /* _nostr_server_src_nostr_server_H_S3tmaA4eDaO6erjGNp3r9dBfJaoPIKSa_ */
