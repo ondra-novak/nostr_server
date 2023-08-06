@@ -11,23 +11,35 @@
 </head>
 <body onload="start()">
 
-<h1>File demo</h1>
+<h1>Attachment demo</h1>
 <p>Your public key is: <span id="pubkey"></span></p>
 
 <h2>Upload</h2>
 <table>
     <tr><th>Note kind:</th><td><input type="number" size="5" id="notekind" value="1"></td></tr>
     <tr><th>Content:</th><td><input type="text" size="64" id="filedesc"></td></tr>
-    <tr><th>Choose file:</th><td><input type="file" size="64" id="fileobj"></td></tr>
+    <tr><th>Attachment:</th><td><input type="file" size="64" id="att1"></td></tr>
+    <tr><th>Attachment:</th><td><input type="file" size="64" id="att2"></td></tr>
+    <tr><th>Attachment:</th><td><input type="file" size="64" id="att3"></td></tr>
+    <tr><th>Attachment:</th><td><input type="file" size="64" id="att4"></td></tr>
     <tr><th></th><td><button id="doupload">Upload</button></td></tr>
-    <tr><th>Uploaded file ID:</th><td id="fileidout"></td></tr>
-    <tr><th></th><td><button id="post_reuse">POST + Reuse attachment</button></td></tr>
-    
+    <tr><th>Event ID:</th><td id="eventhash"></td></tr>
+    <tr><th>Attachment ID 1:</th><td id="att1hash"></td></tr>
+    <tr><th>Attachment ID 2:</th><td id="att2hash"></td></tr>
+    <tr><th>Attachment ID 3:</th><td id="att3hash"></td></tr>
+    <tr><th>Attachment ID 4:</th><td id="att4hash"></td></tr>    
+</table>
+
+<h2>Show event</h2>
+<table>
+    <tr><th>Event ID:</th><td><input type="search" size="64" id="srch_eventid"></td></tr>
+    <tr><th></th><td><button id="event_srch">Search</button></td></tr>
+    <tr><th>Content</th><td><pre id="event_content"></pre></td></tr>
 </table>
 
 <h2>Download</h2>
 <table>
-    <tr><th>Attachment ID (hex)</th><td><input type="text" size="64" id="fileid"></td></tr>
+    <tr><th>Attachment ID (hex)</th><td><input type="search" size="64" id="fileid"></td></tr>
     <tr><th></th><td><button id="dofetch">Fetch</button> <button id="dolink">Get link</button><a target="_blank" id="filelink"></a></td></tr>
 </table>
 <img src="" id="outimage" hidden>

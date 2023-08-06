@@ -145,74 +145,68 @@ async function getAsByteArray(file) {
 
 var app;
 
+
 async function do_upload() {
-    let el = document.getElementById("fileobj");
-    let fdata = await getAsByteArray(el.files[0]);
-    let fhex = bitcoinjs.crypto.sha256(fdata).toString("hex");
-    document.getElementById("fileidout").textContent = fhex;
+
+    var attfields = ["att1","att2","att3","att4"].map(x=>document.getElementById(x));
+    var attoutput = ["att1hash","att2hash","att3hash","att4hash"].map(x=>document.getElementById(x));
+
+    var attachments = [];
+    for (let i = 0; i < attfields.length; ++i) {
+    	let f = attfields[i].files;
+    	if (f.length) {
+	    let fdata = await getAsByteArray(f[0]);
+	    let fhex = bitcoinjs.crypto.sha256(fdata).toString("hex");
+	    attoutput[i].textContent = fhex;
+	    attachments.push({
+	    	data:fdata,
+	    	hash:fhex,
+	    	mime:f[0].type?f[0].type:"application/octet-stream",
+	    	size:f[0].size
+	    });
+    	}  else {
+    		attoutput[i].textContent = "n/a";    		
+    	}
+    }
+    
+    let eventhash = document.getElementById("eventhash");
+
     let desc = document.getElementById("filedesc").value;
-    let size = el.files[0].size;
-    let name = el.files[0].name;
-    let type = el.files[0].type;
-    type = type?type:"application/octet-stream";
     let kind = document.getElementById("notekind").valueAsNumber;
-    let event = {    
-        content:desc,
-        tags:[
-            ["attachment",fhex,""+size,type]
-        ],
-        kind:kind
+
+    
+    let event = {
+    	content:desc,
+    	tags: attachments.map(x=>{
+    		return ["attachment",x.hash,""+x.size, x.mime];
+    	}),
+    	kind:kind
     }
     event = await app.sign_event(event);
+    eventhash.textContent = event.id;
+    
     let status = await app.send_req(["ATTACH", event],(msg)=>{
         if (msg[0] == "OK" && msg[1]==event.id) return [msg[2],msg[3]];
         if (msg[0] == "NOTICE") return [false, msg[1]];
     });
     if (status[0]) {
-        var b = new Blob([fdata], {type:type});
-        status = await app.send_req(b,(msg)=>{
-            if (msg[0] == "ATTACH" && msg[1] == fhex) return [msg[2],msg[3]];
-        });
-        if (status[0]) alert ("upload successful");
-        else alert("Upload error:" + status[1]);
-    } else {
-        alert("Request error:" + status[1]);
+    	for(let i = 0; i < attachments.length; i++) {
+		var b = new Blob([attachments[i].data]);
+		status = await app.send_req(b,(msg)=>{
+		    if (msg[0] == "ATTACH" && msg[1] == attachments[i].hash) return [msg[2],msg[3]];
+		});    		
+		if (!status[0]) break;
+    	}
     }
+    if (status[0]) {
+    	document.getElementById("srch_eventid").value = event.id;
+    	alert("Upload successful:" + status[1]);
+    } else {
+      	alert("!!! Error:" + status[1]);
+    }
+    
 }
 
-async function do_post_reuse() {
-    let el = document.getElementById("fileobj");
-    let fdata = await getAsByteArray(el.files[0]);
-    let fhex = bitcoinjs.crypto.sha256(fdata).toString("hex");
-    document.getElementById("fileidout").textContent = fhex;
-    let desc = document.getElementById("filedesc").value;
-    let size = el.files[0].size;
-    let name = el.files[0].name;
-    let type = el.files[0].type;
-    type = type?type:"application/octet-stream";
-    let kind = document.getElementById("notekind").valueAsNumber;
-    let event = {    
-        content:desc,
-        tags:[
-            ["attachment",fhex,""+size,type]
-        ],
-        kind:kind
-    }
-    event = await app.sign_event(event);
-    let status = await app.send_req(["ATTACH", event],(msg)=>{
-        if (msg[0] == "OK" && msg[1]==event.id) return [msg[2],msg[3]];
-        if (msg[0] == "NOTICE") return [false, msg[1]];
-    });
-    if (status[0]) {
-        status = await app.send_req(["FETCH",fhex,"ATTACH"],(msg)=>{
-            if (msg[0] == "ATTACH" && msg[1] == fhex) return [msg[2],msg[3]];
-        });
-        if (status[0]) alert ("Post successful");
-        else alert("Upload error:" + status[1]);
-    } else {
-        alert("Request error:" + status[1]);
-    }
-}
 
 
 var imgurl;
@@ -252,6 +246,27 @@ async function do_link() {
     }
 }
 
+async function event_search() {
+	let fld = document.getElementById("srch_eventid");
+	let ctx = document.getElementById("event_content");
+	if (fld.value) {
+		let res = await app.send_req(["REQ","demo_srch",{"ids":[fld.value]}],msg=>{
+			if (msg[0] == "EVENT" && msg[1] == "demo_srch") {
+				return msg[2];
+			}
+			if (msg[0] == "EOSE") {
+				return false;
+			}
+		});
+		app.send_req(["CLOSE","demo_srch"]);
+		if (res) {
+			ctx.textContent = JSON.stringify(res,null,"  ");
+		} else {
+			ctx.textContent = "not found";
+		}
+	}
+}
+
 async function start() {
     app = new SimpleNostrClient("abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon abandon",
         (location.protocol=="http:"?"ws://":"wss://")+location.hostname+":"+location.port);
@@ -260,7 +275,7 @@ async function start() {
     console.log("connected");
     document.getElementById("pubkey").textContent = app.get_pubkey();
     document.getElementById("doupload").addEventListener("click", do_upload);
-    document.getElementById("post_reuse").addEventListener("click", do_post_reuse);
     document.getElementById("dofetch").addEventListener("click", do_fetch);
     document.getElementById("dolink").addEventListener("click", do_link);
+    document.getElementById("event_srch").addEventListener("click", event_search);
 }

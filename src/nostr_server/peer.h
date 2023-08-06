@@ -62,8 +62,8 @@ protected:
 
     cocls::suspend_point<bool> send(const docdb::Structured &msgdata);
 
-    telemetry::UniqueSensor<ClientSensor> _sensor;
-    telemetry::SharedSensor<SharedStats> _shared_sensor;
+/*    telemetry::UniqueSensor<ClientSensor> _sensor;
+    telemetry::SharedSensor<SharedStats> _shared_sensor;*/
 
 
     template<typename Fn>

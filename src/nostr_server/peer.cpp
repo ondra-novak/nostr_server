@@ -19,8 +19,8 @@ Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &
 ,_rate_limiter(options.event_rate_window, options.event_rate_limit)
 ,_attachments(options.attachment_max_count, options.attachment_max_size)
 {
-    _sensor.enable(std::move(ident), std::move(user_agent));
-    _shared_sensor.enable();
+/*    _sensor.enable(std::move(ident), std::move(user_agent));
+    _shared_sensor.enable();*/
     _app->client_counter(1);
 }
 Peer::~Peer() {
@@ -130,9 +130,9 @@ void Peer::processMessage(std::string_view msg_text) {
 
         Command cmd = commands[cmd_text];
 
-        _sensor.update([&](ClientSensor &szn){
+/*        _sensor.update([&](ClientSensor &szn){
             ++szn.command_counter;
-        });
+        });*/
 
         switch (cmd) {
             case Command::EVENT:
@@ -187,9 +187,9 @@ public:
 
 void Peer::send_error(std::string_view id, std::string_view text) {
     send({commands[Command::OK], id, false, text});
-    _sensor.update([&](ClientSensor &szn){
+/*    _sensor.update([&](ClientSensor &szn){
         szn.error_counter++;
-    });
+    });*/
     _req.log_message(text, static_cast<int>(PeerServerity::warn));
 
 }
@@ -208,7 +208,7 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         Event event = Event::fromStructured(msg);
         if (_app->find_event_by_id(event.id) && !no_special_events) {
             send({commands[Command::OK], id, true, "duplicate: ok"});
-            _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
+/*            _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});*/
             return;
         }
 //        std::string_view pubkey = event["pubkey"].as<std::string_view>();
@@ -233,7 +233,7 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
             if (no_special_events) throw std::invalid_argument("This event is not allowed here");
             _app->get_publisher().publish(EventSource{std::move(event),this});
-            _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
+ /*           _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});*/
             send({commands[Command::OK], id, true, ""});
             return;
         }
@@ -257,11 +257,11 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
             return;
         }
         on_verify(id, std::move(event));
-        _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});
+/*        _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});*/
     } catch (const EventParseException &e) {
         send_error(id, std::string("invalid: ")+e.what());
     } catch (const docdb::DuplicateKeyException &e) {
-        _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
+/*        _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});*/
         send({commands[Command::OK], id, true, "duplicate:"});
     } catch (const Blocked &e) {
         send_error(id, std::string("blocked: ") + e.what());
@@ -333,10 +333,10 @@ void Peer::on_req(const docdb::Structured &msg) {
     send({commands[Command::EOSE], subid});
 
     _subscriptions.emplace_back(subid, std::move(flts));
-    _sensor.update([&](ClientSensor &szn){
+/*    _sensor.update([&](ClientSensor &szn){
         ++szn.query_counter;
         szn.subscriptions = _subscriptions.size();
-     });
+     });*/
 
 }
 
@@ -361,10 +361,10 @@ void Peer::on_close(const docdb::Structured &msg) {
         return s.first == id;
     });
     _subscriptions.erase(iter, _subscriptions.end());
-    _sensor.update([&](ClientSensor &szn){
+/*    _sensor.update([&](ClientSensor &szn){
         szn.subscriptions = _subscriptions.size();
         szn.max_subscriptions = std::max(szn.max_subscriptions, szn.subscriptions);
-    });
+    });*/
 }
 
 void Peer::event_deletion(const Event &event) {
@@ -395,7 +395,7 @@ void Peer::event_deletion(const Event &event) {
         _app->get_publisher().publish(EventSource{event,this});
     }
     send({commands[Command::OK], event.id.to_hex(), true, ""});
-    _sensor.update([&](ClientSensor &szn){szn.report_kind(5);});
+    /*_sensor.update([&](ClientSensor &szn){szn.report_kind(5);});*/
 }
 
 bool Peer::check_pow(std::string_view id) const {
@@ -465,32 +465,44 @@ void Peer::process_auth(const JSON &jevent) {
 }
 
 void Peer::on_attachment_published(AttachmentLock lk) {
-        if (_attachments.attachment_published(lk)) {
-            bool duplicate = true;
-            bool complete = false;
-            _attachments.flush_events_to_publish([&](Event &ev){
-                try {
-                    if (_app->find_event_by_id(ev.id)) {
-                        _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
-                        return;
+    auto st = _attachments.attachment_published(lk);
+    bool res = true;
+    std::string_view text;
+    switch (st) {
+        case AttachmentUploadControl::complete: {
+            Event ev(std::move(*_attachments.get_event()));
+                if (_app->find_event_by_id(ev.id)) {
+                    text = "duplicate";
+                } else {
+                    text = "complete";
+                    try {
+                        _app->publish(std::move(ev), nullptr);
+                    } catch (const docdb::DuplicateKeyException &e) {
+                        text = "duplicate";
+                    } catch (const std::exception &e) {
+                        send_notice(std::string("internal_error:").append(e.what()));
                     }
-                    _app->publish(std::move(ev), nullptr);
-                    complete = true;
-                    duplicate = false;
-                } catch (const docdb::DuplicateKeyException &e) {
-                    _shared_sensor.update([](SharedStats &stats){++stats.duplicated_post;});
-                } catch (const std::exception &e) {
-                    send_notice(std::string("internal_error:").append(e.what()));
                 }
-            });
-            send({commands[Command::ATTACH], lk->to_hex(), true, complete?(duplicate?"duplicate":"complete"):"continue"});
-        } else {
-            send({commands[Command::ATTACH], lk->to_hex(), false, "invalid: mismatch"});
-        }
+                _attachments.reset();
+            }
+            break;
+        case AttachmentUploadControl::need_more:
+            text = "continue";
+            break;
+        case AttachmentUploadControl::mismatch:
+            res = false;
+            text = "invalid: mismatch";
+            break;
+        default:
+            res = false;
+            text = "internal_error: invalid state";
+            break;
+    }
+    send({commands[Command::ATTACH], lk->to_hex(), res, text});
 }
 
 void Peer::processBinaryMessage(std::string_view msg_text) {
-    AttachmentUploadControl::AttachmentMetadata status = _attachments.check_binary_message(msg_text);
+    AttachmentUploadControl::AttachmentMetadata status = _attachments.on_binary_message(msg_text);
     if (status.valid) {
         auto lock = _app->publish_attachment(Attachment{status.id, status.mime, std::string(msg_text)});
         on_attachment_published(lock);
@@ -503,13 +515,22 @@ void Peer::processBinaryMessage(std::string_view msg_text) {
 void Peer::on_attach(const JSON &msg) {
     on_event_generic(msg[1], [&](const std::string &id, Event &&event){
 
-        auto status = _attachments.register_event(std::move(event));
+        auto status = _attachments.on_attach(std::move(event));
         bool res = false;
         std::string text;
         switch (status) {
+            case AttachmentUploadControl::no_attachments:
             case AttachmentUploadControl::ok: res = true;
-                    if (_app->find_event_by_id(event.id)) text = "duplicate";
-                    else text = "continue";
+                    if (_app->find_event_by_id(event.id)) {
+                        text = "duplicate";
+                    }
+                    else if (status == AttachmentUploadControl::no_attachments) {
+                        text = "complete";
+                        _app->publish(std::move(event), nullptr);
+                    }
+                    else {
+                        text = "continue";
+                    }
                     break;
             case AttachmentUploadControl::invalid_hash: text = "invalid: invalid hash";break;
             case AttachmentUploadControl::invalid_mime: text = "invalid: invalid mime";break;
@@ -569,9 +590,9 @@ void Peer::on_link(const JSON &msg) {
 
 void Peer::send_notice(std::string_view text) {
     send({commands[Command::NOTICE],text});
-    _sensor.update([&](ClientSensor &szn){
+/*    _sensor.update([&](ClientSensor &szn){
         szn.error_counter++;
-    });
+    });*/
 }
 
 

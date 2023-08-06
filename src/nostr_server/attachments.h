@@ -11,39 +11,88 @@ namespace nostr_server {
 
 
 
+///Contains state of ATTACH command, tracks already received attachments
 class AttachmentUploadControl {
 public:
 
-    enum Status {
+    enum EventStatus {
+        ///event received and validated
         ok,
+        ///event is malformed
         malformed,
+        ///too many attachments
         max_attachments,
+        ///one attachment is too large
         max_size,
+        ///invalid mime type
         invalid_mime,
+        ///invalid size
         invalid_size,
+        ///invalid hash
         invalid_hash,
+        ///event has no attachments
+        no_attachments
+    };
+
+
+    enum AttachmentStatus {
+        ///Accepted, but need more attachments
+        need_more,
+        ///Accepted and this was last required attachment
+        complete,
+        ///Rejected, attachment mismatch
+        mismatch
     };
 
     struct AttachmentMetadata {
+        ///contains true, if binary message is valid attachment
         bool valid = false;
+        ///contains attachment ID
         Attachment::ID id = {};
+        ///contains attachment's mime type
         std::string mime = {};
     };
 
-    AttachmentUploadControl(unsigned int max_attachments, std::size_t max_size);
+    ///Constructs state object
+    AttachmentUploadControl(std::size_t max_attachments, std::size_t max_size);
 
-    Status register_event(Event &&ev);
-    AttachmentMetadata check_binary_message(std::string_view msg) const;
-    bool attachment_published(const AttachmentLock &lock);
+    ///Called on ATTACH command,
+    /**
+     * @param ev the event which was carried with the attach command
+     * @return status of validation see EventStatus
+     */
+    EventStatus on_attach(Event &&ev);
 
-    template<typename Fn>
-    void flush_events_to_publish(Fn &&fn);
+    ///Called on binary message
+    /**
+     * This object doesn't publish the binary message, it only extracts metadata,
+     *
+     * @param msg binary message
+     * @return extracted metadata if message is attachment
+     */
+    AttachmentMetadata on_binary_message(std::string_view msg) const;
+
+    ///Must be called after attachment is stored
+    /**
+     * @param lock lock object which is result of storing the attachment. This
+     * prevents GC to scarp the attachment from the database
+     * @return AttachmentStatus
+     */
+    AttachmentStatus attachment_published(const AttachmentLock &lock);
+    ///Retrieve event
+    std::optional<Event> get_event() const;
+    ///Retrieve event
+    std::optional<Event> &get_event();
+
+    ///Reset the state, unlock all locked attachments
+    void reset();
 
 protected:
 
-    unsigned int _max_attachments;
+    std::size_t _max_attachments;
     std::size_t _max_size;
 
+    std::optional<Event> _event;
     struct Info {
         Attachment::ID id;
         std::size_t size;
@@ -51,58 +100,10 @@ protected:
         AttachmentLock lock;
     };
 
-    using IDView = std::basic_string_view<unsigned char>;
-
-    std::vector<Event> _events;
-    std::map<IDView, std::unique_ptr<Info> > _attmap;
-
-    std::vector<std::unique_ptr<Info> > _tmp_infos;
-
-
+    std::vector<Info> _attachments;
 
 };
 
-
-template<typename Fn>
-inline void AttachmentUploadControl::flush_events_to_publish(Fn &&fn) {
-    auto end = _events.end();
-    bool something_done = false;
-    auto new_end = std::remove_if(_events.begin(), _events.end(), [&](Event &ev){
-
-        bool ok = true;
-        ev.for_each_tag("attachment", [&](const Event::Tag &tag){
-            auto attid = Attachment::ID::from_hex(tag.content);
-            auto iter = _attmap.find({attid.data(), attid.size()});
-            if (iter == _attmap.end() || iter->second->lock == nullptr) ok = false;
-        });
-        if (ok) {
-            fn(ev);
-            something_done = true;
-            return true;
-        } else {
-            return false;
-        }
-
-
-    });
-    if (something_done) {
-        _events.erase(new_end, end);
-
-        std::map<IDView, std::unique_ptr<Info> > ip;
-        for (const Event &ev: _events) {
-            ev.for_each_tag("attachment", [&](const Event::Tag &tag){
-                auto attid = Attachment::ID::from_hex(tag.content);
-                auto iter = _attmap.find({attid.data(), attid.size()});
-                if (iter != _attmap.end()) {
-                    ip.emplace(iter->first, std::move(iter->second));
-                    _attmap.erase(iter);
-                }
-            });
-        }
-
-        std::swap(ip, _attmap);
-    }
-}
 
 }
 #endif /* SRC_NOSTR_SERVER_ATTACHMENTS_H_ */

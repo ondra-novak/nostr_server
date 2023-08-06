@@ -137,13 +137,14 @@ protected:
     struct AttLock {
         std::mutex _mx;
         std::vector<AttachmentWeakLock> _lock_map;
-        AttachmentLock lock(const Attachment::ID &id);
+        AttachmentLock lock(const Attachment::ID &id, std::shared_ptr<std::atomic_flag> gc_clear_flag);
         bool is_locked(const Attachment::ID &id);
     };
 
     AttLock _att_lock;
 
-
+    ///contains true if gc is clear - it doesn't need to run, false = dirty, run gc
+    std::shared_ptr<std::atomic_flag> _gc_is_clear;
 
 };
 

@@ -10,3 +10,6 @@
 [submodule "src/shared"]
 	path = src/shared
 	url = https://github.com/ondra-novak/ondra_shared
+[submodule "nostr_nips"]
+	path = nostr_nips
+	url = https://github.com/ondra-novak/nostr-nip-97.git

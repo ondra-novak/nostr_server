@@ -16,10 +16,11 @@
 
 namespace nostr_server {
 
-const docdb::Structured App::supported_nips = {1,9,11,12,16,20,33,42, 45,50};
+const docdb::Structured App::supported_nips = {1,9,11,12,16,20,33,42, 45,50,97};
 //to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
+
 
 
 
@@ -41,6 +42,7 @@ App::App(const Config &cfg)
         ,_index_fulltext(_storage, "fulltext")
         ,_index_whitelist(_storage, "karma")
         ,_index_attachments(_storage,"attachments")
+        ,_gc_is_clear(std::make_shared<std::atomic_flag>())
 {
     _storage.register_transaction_observer(autocompact());
     if (cfg.metric.enable) {
@@ -465,17 +467,27 @@ bool App::is_home_user(const Event::Pubkey &pubkey) const {
 }
 
 void App::publish(Event &&event, const void *publisher)  {
-    auto to_replace = doc_to_replace(event);
-    if (to_replace != docdb::DocID(-1)) {
-        _storage.put(event, to_replace);
-    }
-    event_publish.publish(EventSource{std::move(event),publisher});
 
-    if (to_replace) start_gc_thread();
+    //if replacable event, find event to replace
+    auto to_replace = doc_to_replace(event);
+
+    //to_replace==-1 means that this event is old, cannot be replaced
+    if (to_replace != docdb::DocID(-1)) {
+        //replace event
+        _storage.put(event, to_replace);
+        //publish event
+        event_publish.publish(EventSource{std::move(event),publisher});
+    }
+
+    if (_gc_is_clear->test_and_set(std::memory_order_relaxed) == false) {
+        start_gc_thread();
+    }
+
+
 }
 
 AttachmentLock App::publish_attachment(Attachment &&event) {
-    AttachmentLock lock = _att_lock.lock(event.id);
+    AttachmentLock lock = _att_lock.lock(event.id, _gc_is_clear);
     docdb::DocID to_replace = find_attachment(event.id);
     _storage.put(EventOrAttachment(std::move(event)), to_replace);
     return lock;
@@ -483,7 +495,7 @@ AttachmentLock App::publish_attachment(Attachment &&event) {
 
 AttachmentLock App::lock_attachment(const Attachment::ID &id)  {
     if (find_attachment(id)) {
-        AttachmentLock lock = _att_lock.lock(id);
+        AttachmentLock lock = _att_lock.lock(id, _gc_is_clear);
         return lock;
     } else  {
         return {};
@@ -565,7 +577,7 @@ void App::start_gc_thread() {
     }
 }
 
-AttachmentLock App::AttLock::lock(const Attachment::ID &id) {
+AttachmentLock App::AttLock::lock(const Attachment::ID &id, std::shared_ptr<std::atomic_flag> gc_clear_flag) {
     std::lock_guard _(_mx);
     AttachmentLock fnd;
     auto iter = std::remove_if(_lock_map.begin(), _lock_map.end(), [&](const AttachmentWeakLock &x){
@@ -575,7 +587,13 @@ AttachmentLock App::AttLock::lock(const Attachment::ID &id) {
     });
     _lock_map.erase(iter, _lock_map.end());
     if (!fnd) {
-        fnd = std::make_shared<Attachment::ID>(id);
+
+        fnd = std::shared_ptr<Attachment::ID>(new Attachment::ID(id),
+                        [=](Attachment::ID *z){
+                                              delete z;
+                                              gc_clear_flag->clear();
+                        });
+
         _lock_map.push_back(fnd);
     }
     return fnd;

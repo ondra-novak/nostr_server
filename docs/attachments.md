@@ -241,6 +241,8 @@ Garbage collecting
 Relay should perform garbage collecting of attachments without any reference on events. 
 
 
+
+
 FAQ
 ---
 
@@ -258,9 +260,9 @@ That's not true. If you read NIP-95 carefully, there are several requirements fo
 
 If I want to have some control over the binary content, as a relay developer I have to do more programming, which I have to do in this proposal anyway. Plus some things are more difficult to deal with than using binary messages. For example, I have to allow the same interface for presenting normal events and the same for presenting NIP-95 events, yet handle them diametrically differently.
 
-Relay also cannot dictate the size of the binary content. There is a limit on the size of each kind, but clients don't examine this much and most of them react to the error message by simply not allowing the operation. For example, a client uploading a large image that the relay rejects might reduce the resolution or compression quality of the image to fit to the relay's limits. This is the motivation behind this proposal.
+In the case of NIP-95, the relay cannot control the size of the binary content. The relay can also be configured so that text messages are short, but the binary content can be large, for example for storing videos, because the relay places attachments on a separate repository. This NIP also specifies in more detail how limits are communicated to the client. If any of the attachments are too large, the client can reduce the resolution or quality of the stored media to meet the limits set
 
-An unresolved issue relates to garbage collection. If a reference to a shared binary content disappears, does the relay have the right to delete this content? If I take an ordinary relay that does not implement NIP-95, then these events stay there - forever. What is the correct behavior?
+An unresolved issue relates to garbage collection. If I want to deal with garbage collecting within NIP-95, I encounter various situations where a race condition can occur, so there can be a situation where someone uploads files but they can be deleted before the actual event is published. This is because the protocol treats each event as a separate record with no linkage to other records.
 
 **Binary content should be transferred using the HTTP protocol see NIP-96**
 
@@ -268,7 +270,7 @@ No, it didn't. We're mixing protocols. What if the relay is not an HTTP server? 
 
 **What if a client sends an event with the tag "attachment" but sends it via the EVENT command?**
 
-Every client should be prepared for a situation where the attachment is not stored on the relay. The `FETCH` command will simply fail. That will happen in this case as well. So the event will be published but the attachments will not be visible
+The `FETCH` command simply fails. Attachments aren't available.
 
 **How a client that does not support this NIP work?**
 
@@ -294,23 +296,14 @@ Just as I can place anything from tags using #[index], I can reference an attach
 
 This is related to the garbage collection requirement. It could happen that the client uploads attachments, but before publishing the event, the garbage collector comes and because the new attachments don't have a reference, it deletes them
 
-**Může klient zahájít více požadavků ATTACH současně (tedy bez dokončení předchozího)?**
+**Can a client initiate multiple ATTACH requests at the same time (i.e. without completing the previous one)?**
 
-Tato situace není definovaná. Pro zjednodušení předpokládejme, že ne, tedy že nový příkaz "ATTACH" v rámci stejného spojení zruší platnost předchozího příkazu "ATTACH", pokud event tohoto příkazu nebyl dokončen a publikován. Lze případně o tom diskutovat.
+This situation is not defined. For simplicity, let us assume that the answer is no, i.e. that a new ATTACH command within the same connection invalidates the previous ATTACH command if the event of that command has not been completed and published. This can possibly be discussed.
 
-**Proč musí klient explicitně linkovat existující attachmenty na nový event (FETCH+ATTACH), nestačilo by, aby relay toto provedla automaticky, když vidí, že některé attachmenty jsou již na relay přítomné?**
+**Why does the client have to explicitly link existing attachments to the new event (FETCH+ATTACH), wouldn't it be enough for the relay to do this automatically when it sees that some attachments are already present in the relay?**
 
-Bylo by to možné, ale výrazně to zesložití protocol flow. Klient totiž ví, kolik attachmentů musí odeslat. Pokud by relay některé attachmenty doplnila automaticky, musela by tuto skutečnost klientovi sdělit. Zřejmě pomocí odpovědi na ATTACH.
+It would be possible, but it would significantly complicate the protocol flow. The client knows how many attachments it has to send. If the relay would add some attachments automatically, it would have to communicate this fact to the client. Presumably via an ATTACH response.
 
-Toto ale stejně neřeší situace kdy může dojít k souběhu, kdy se stejný attachment objeví na relay před dokončení požadavku. Proto je lepší, když správu attachmentů řeší klient a relay se v tomto případě chová pasivně.
+However, this still does not address the situation where there may be a race condition, where the same attachment appears on a relay before the request is completed. Therefore, it is better if the client handles the attachment management and the relay behaves passively in this case.
 
-**Jak se řeší zaslání duplicitního eventu s attachmentem přes příkaz ATTACH?**
 
-Zaslání duplicitního eventu není považováno za chybu. V takovém případě klient stejně provede upload všech attachmentů. Nicméně relay může do odpovědi na ATTACH vložit status "duplicate", čímž dá klientovi najevo, že posílá duplicitní event a klient tedy nemusí pokračovat v posílání attachmentů.
-
-```
-client: ["ATTACH", <event>]
-relay:  ["OK","<event-id">,true,"duplicate"]
-```
-
-I v tomto případě je relay připravena přijmout binární obsah pro tento event.
