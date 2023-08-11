@@ -1,3 +1,5 @@
+#include "kinds.h"
+
 #include <coroserver/http_ws_server.h>
 #include <coroserver/http_stringtables.h>
 #include <coroserver/static_lookup.h>
@@ -17,7 +19,6 @@ Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &
 ,_options(std::move(options))
 ,_subscriber(_app->get_publisher())
 ,_rate_limiter(options.event_rate_window, options.event_rate_limit)
-,_attachments(options.attachment_max_count, options.attachment_max_size)
 {
 /*    _sensor.enable(std::move(ident), std::move(user_agent));
     _shared_sensor.enable();*/
@@ -37,9 +38,8 @@ NAMED_ENUM(Command,
         NOTICE,
         AUTH,
         OK,
-        ATTACH,
-        FETCH,
-        LINK
+        FILE,
+        RETRIEVE,
 );
 constexpr NamedEnum_Command commands={};
 
@@ -53,7 +53,7 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
     if (!options.http_header_ident.empty())  ident = req[options.http_header_ident];
     if (ident.empty()) ident = req.get_peer_name().to_string();
     Peer me(req, app, options,ua,ident);
-    bool res =co_await Server::accept(me._stream, me._req);
+    bool res =co_await Server::accept(me._stream, me._req,{50000,50000},{false, std::max(options.max_message_size, options.attachment_max_size)});
     if (!res) co_return true;
 
     me._req.log_message("Connected client: "+std::string(ua), static_cast<int>(PeerServerity::progress));
@@ -71,6 +71,9 @@ cocls::future<bool> Peer::client_main(coroserver::http::ServerRequest &req, PApp
                 case Type::text:me.processMessage(msg.payload);break;
                 case Type::binary:me.processBinaryMessage(msg.payload);break;
                 case Type::connClose: rep = false; continue;
+                case Type::largeFrame:
+                    me.send_notice("Message too large");
+                    break;
                 default: break;
             }
             co_await me._stream.wait_for_flush();
@@ -117,6 +120,9 @@ cocls::future<void> Peer::listen_publisher() {
 
 
 void Peer::processMessage(std::string_view msg_text) {
+    if (msg_text.size() > _options.max_message_size) {
+        send_notice("Text message is too long");
+    }
     try {
         _req.log_message([&](auto logger){
             std::ostringstream buff;
@@ -146,14 +152,11 @@ void Peer::processMessage(std::string_view msg_text) {
             case Command::AUTH:
                 process_auth(msg[1]);
                 break;
-            case Command::ATTACH:
-                on_attach(msg);break;
+            case Command::FILE:
+                on_file(msg);break;
                 break;
-            case Command::FETCH:
-                on_fetch(msg);break;
-                break;
-            case Command::LINK:
-                on_link(msg);break;
+            case Command::RETRIEVE:
+                on_retrieve(msg);break;
                 break;
             default: {
                 send_notice(std::string("Unknown command: ").append(cmd_text));
@@ -229,8 +232,8 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
-        const auto &kind = event.kind;
-        if (kind >= 20000 && kind < 30000) { //Ephemeral event  - do not store
+        const auto &k = event.kind;
+        if (k >= kind::Ephemeral_Begin && k < kind::Ephemeral_End) { //Ephemeral event  - do not store
             if (no_special_events) throw std::invalid_argument("This event is not allowed here");
             _app->get_publisher().publish(EventSource{std::move(event),this});
  /*           _sensor.update([&](ClientSensor &szn){szn.report_kind(kind);});*/
@@ -242,7 +245,7 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         }
         if (!_no_limit && _options.whitelisting) {
             if (!_app->check_whitelist(event.author)) {
-                if (kind == 4) {
+                if (k == 4) {
                     auto target = event.get_tag_content("p");
                     auto pk = Event::Pubkey::from_hex(target);
                     if (!_app->is_home_user(pk)) throw Blocked("Target user not found");
@@ -251,7 +254,7 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
                 }
             }
         }
-        if (kind == 5) {
+        if (k == 5) {
             if (no_special_events) throw std::invalid_argument("This event is not allowed here");
             event_deletion(event);
             return;
@@ -314,7 +317,14 @@ void Peer::on_req(const docdb::Structured &msg) {
                     const Event &ev = std::get<Event>(evatt);
                     for (const auto &f: flts) {
                         if (f.test(ev)) {
-                            if (!send({commands[Command::EVENT], subid, ev.toStructured()})) return;
+                            auto sevent = ev.toStructured();
+                            if (ev.kind == kind::File_Header && ev.find_indexed_tag('f', "file")) {
+                                std::string url ("http");
+                                url.append(std::string_view(_req.get_url()).substr(2));
+                                url.append(_app->get_attachment_link(ev.id, ev.get_tag_content("m")));
+                                sevent.set("file_url", url);
+                            }
+                            if (!send({commands[Command::EVENT], subid, sevent})) return;
                             --limit;
                             break;
                         }
@@ -438,8 +448,8 @@ void Peer::process_auth(const JSON &jevent) {
         if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
-        auto kind = event.kind;
-        if (kind != 22242) {
+        auto k = event.kind;
+        if (k != kind::Client_Authentication) {
             throw std::invalid_argument("Unsupported kind");
         }
         auto created_at = std::chrono::system_clock::from_time_t(event.created_at);
@@ -457,136 +467,123 @@ void Peer::process_auth(const JSON &jevent) {
             _no_limit = true;
         }
 */
-        send({commands[Command::OK], id, true, "Welcome on relay!"});
+        send({commands[Command::OK], id, true, "Welcome to relay!"});
     } catch (const std::exception &e) {
         send_error(id,std::string("restricted:") + e.what());
     }
 
 }
 
-void Peer::on_attachment_published(AttachmentLock lk) {
-    auto st = _attachments.attachment_published(lk);
-    bool res = true;
-    std::string_view text;
-    switch (st) {
-        case AttachmentUploadControl::complete: {
-            Event ev(std::move(*_attachments.get_event()));
-                if (_app->find_event_by_id(ev.id)) {
-                    text = "duplicate";
-                } else {
-                    text = "complete";
-                    try {
-                        _app->publish(std::move(ev), nullptr);
-                    } catch (const docdb::DuplicateKeyException &e) {
-                        text = "duplicate";
-                    } catch (const std::exception &e) {
-                        send_notice(std::string("internal_error:").append(e.what()));
-                    }
-                }
-                _attachments.reset();
-            }
-            break;
-        case AttachmentUploadControl::need_more:
-            text = "continue";
-            break;
-        case AttachmentUploadControl::mismatch:
-            res = false;
-            text = "invalid: mismatch";
-            break;
-        default:
-            res = false;
-            text = "internal_error: invalid state";
-            break;
-    }
-    send({commands[Command::ATTACH], lk->to_hex(), res, text});
-}
 
 void Peer::processBinaryMessage(std::string_view msg_text) {
-    AttachmentUploadControl::AttachmentMetadata status = _attachments.on_binary_message(msg_text);
-    if (status.valid) {
-        auto lock = _app->publish_attachment(Attachment{status.id, status.mime, std::string(msg_text)});
-        on_attachment_published(lock);
-    } else {
-        send({commands[Command::ATTACH], status.id.to_hex(), false, "invalid: mismatch:"});
-    }
-
-}
-
-void Peer::on_attach(const JSON &msg) {
-    on_event_generic(msg[1], [&](const std::string &id, Event &&event){
-
-        auto status = _attachments.on_attach(std::move(event));
-        bool res = false;
-        std::string text;
-        switch (status) {
-            case AttachmentUploadControl::no_attachments:
-            case AttachmentUploadControl::ok: res = true;
-                    if (_app->find_event_by_id(event.id)) {
-                        text = "duplicate";
-                    }
-                    else if (status == AttachmentUploadControl::no_attachments) {
-                        text = "complete";
-                        _app->publish(std::move(event), nullptr);
-                    }
-                    else {
-                        text = "continue";
-                    }
-                    break;
-            case AttachmentUploadControl::invalid_hash: text = "invalid: invalid hash";break;
-            case AttachmentUploadControl::invalid_mime: text = "invalid: invalid mime";break;
-            case AttachmentUploadControl::invalid_size: text = "invalid: invalid size";break;
-            case AttachmentUploadControl::max_size: text = "max_attachment_size:" + std::to_string(_options.attachment_max_size);break;
-            case AttachmentUploadControl::max_attachments: text = "max_attachment_count:" + std::to_string(_options.attachment_max_count);break;
-            default:
-            case AttachmentUploadControl::malformed: text = "invalid: malformed";break;
-        }
-
-        send({commands[Command::OK], id, res, text});
-    }, true);
-}
-
-void Peer::on_fetch(const JSON &msg) {
-    std::string id = msg[1].as<std::string>();
-    std::string cmd = msg[2].to_string();
-    auto hash = Binary<32>::from_hex(id);
-    if (cmd == commands[Command::ATTACH]) {
-        auto lk = _app->lock_attachment(hash);
-        if (lk) {
-            on_attachment_published(lk);
-        } else {
-            send({commands[Command::ATTACH], id, false, "missing: attachment not found"});
-        }
-    } else {
-        auto docid = _app->find_attachment(hash);
-        if (docid) {
-            const auto &stor = _app->get_storage();
-            auto doc = stor.find(docid);
-            if (doc && std::holds_alternative<Attachment>(doc->document)) {
-                const Attachment &att = std::get<Attachment>(doc->document);
-                send({commands[Command::FETCH], id, true, att.content_type});
-                _stream.write({att.data, Type::binary});
-                return ;
-            }
-        }
-        send({commands[Command::FETCH], id, false, "missing: attachment not found"});
-    }
-}
-
-void Peer::on_link(const JSON &msg) {
-    std::string id = msg[1].as<std::string>();
-    auto hash = Binary<32>::from_hex(id);
-    auto link = _app->get_attachment_link(hash);;
-    if (link.empty()) {
-        send({commands[Command::LINK], id, false, "missing: attachment not found"});
+    if (!_file_event.has_value()) {
+        send_notice("unsupported binary message");
         return;
     }
-    std::string peer_url(this->_req.get_url());
-    peer_url = "http"+peer_url.substr(2);
-    if (peer_url.back() != '/') peer_url.push_back('/');
-    peer_url.append(link);
-    send({commands[Command::LINK], id, true, peer_url});
 
+    Event &ev = *_file_event;
+
+    Attachment::ID hash;
+    SHA256(reinterpret_cast<const unsigned char *>(msg_text.data()), msg_text.size(), hash.data());
+
+    Attachment::ID need_hash = Attachment::ID::from_hex(ev.get_tag_content("x"));
+    std::size_t sz = std::strtoull(ev.get_tag_content("size").c_str(),nullptr,10);
+    if (sz != msg_text.size() || hash != need_hash) {
+        send({commands[Command::OK], ev.id.to_hex(), false, "invalid: file mismatch"});
+        return;
+    }
+
+    auto id = _app->find_attachment(hash);
+    if (id) {
+        send({commands[Command::OK], ev.id.to_hex(), true, "duplicate"});
+        if (_app->find_event_by_id(_file_event->id) == 0) {
+            _app->publish(std::move(ev), nullptr);
+        }
+        _file_event.reset();
+        return;
+    }
+    try {
+        _app->publish(std::move(ev),Attachment{hash,  std::string(msg_text)}, nullptr);
+        _file_event.reset();
+        send({commands[Command::OK], ev.id.to_hex(), true, ""});
+    } catch (std::exception &e) {
+        _file_event.reset();
+        send({commands[Command::OK], ev.id.to_hex(), false, "error: internal error"});
+       throw;
+    }
 }
+
+void Peer::on_file(const JSON &msg) {
+        on_event_generic(msg[1], [&](const std::string &id, Event &&event){
+            try {
+                if (event.kind != kind::File_Header) throw FileError::unsupported_kind;
+
+                bool relay_flag = false;
+                std::string mime;
+                std::string hash;
+                std::string size;
+
+                for (const auto &x: event.tags) {
+                    if (x.tag == "x") {
+                        if (hash.empty()) hash = x.content; else throw FileError::malformed;
+                    } else if (x.tag == "m") {
+                        if (mime.empty()) mime = x.content; else throw FileError::malformed;
+                    } else if (x.tag == "size") {
+                        if (size.empty()) size = x.content; else throw FileError::malformed;
+                    } else if (x.tag == "f" && x.content == "flag") {
+                        if (!relay_flag) relay_flag = true; else throw FileError::malformed;
+                    }
+                }
+                if (size.empty() || mime.empty() || hash.size() != 64) throw FileError::malformed;
+
+                char *s_end = nullptr;
+                std::size_t sz = std::strtoul(size.c_str(), &s_end, 10);
+                if (*s_end) throw FileError::malformed;
+
+                if (sz > _options.attachment_max_size) throw FileError::max_size;
+                _file_event = std::move(event);
+
+                send({commands[Command::OK], id, true, "continue"});
+            } catch (FileError e) {
+
+                std::string msg;
+                switch(e) {
+                    default:
+                    case FileError::malformed: msg = "invalid: malformed"; break;
+                    case FileError::unsupported_kind: msg = "invalid: unsupported kind"; break;
+                    case FileError::max_size: msg = "max_size: "+std::to_string(_options.attachment_max_size); break;
+                }
+                send({commands[Command::OK], id, false, msg});
+            }
+
+        }, true);
+}
+
+void Peer::on_retrieve(const JSON &msg) {
+    const auto &stor = _app->get_storage();
+    std::string id = msg[1].as<std::string>();
+    auto ev_id = Binary<32>::from_hex(id);
+    auto docid = _app->find_event_by_id(ev_id);
+    do {
+        if (!docid) break;
+        auto doc = stor.find(docid);
+        if (!doc || !std::holds_alternative<Event>(doc->document)) break;
+        const Event &event = std::get<Event>(doc->document);
+        if (event.kind != kind::File_Header || !event.find_indexed_tag('f', "file")) break;
+        std::string hash = event.get_tag_content("x");
+        auto att_hex = Binary<32>::from_hex(hash);
+        auto att_id = _app->find_attachment(att_hex);
+        if (!att_id) break;
+        auto att_doc = stor.find(att_id);
+        if (!att_doc || !std::holds_alternative<Attachment>(att_doc->document)) break;
+        const Attachment &att = std::get<Attachment>(att_doc->document);
+        send({commands[Command::OK], id, true, ""});
+        _stream.write({att.data, Type::binary});
+        return;
+    } while (false);
+    send({commands[Command::RETRIEVE], id, false, "missing: not found"});
+}
+
 
 void Peer::send_notice(std::string_view text) {
     send({commands[Command::NOTICE],text});

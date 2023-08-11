@@ -46,12 +46,11 @@ public:
     virtual bool is_home_user(const Event::Pubkey &pubkey) const override;
     virtual void client_counter(int increment) override;
     virtual void publish(Event &&ev, const void *publisher) override;
+    virtual void publish(Event &&ev, const Attachment &attach, const void *publisher) override;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;
     virtual bool check_whitelist(const Event::Pubkey &k) const override;
-    virtual AttachmentLock publish_attachment(Attachment &&event) override;
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
-    virtual std::string get_attachment_link(const Attachment::ID &id) const override;
-    virtual AttachmentLock lock_attachment(const Attachment::ID &id)  override;
+    virtual std::string get_attachment_link(const Event::ID &id, std::string_view mime) const override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -85,7 +84,7 @@ protected:
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
     struct IndexAttachmentFn {
-        static constexpr int revision = 3;
+        static constexpr int revision = 4;
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
 
@@ -133,15 +132,6 @@ protected:
 
     std::jthread _gc_thread;
     std::atomic<bool> _gc_running = {false};
-
-    struct AttLock {
-        std::mutex _mx;
-        std::vector<AttachmentWeakLock> _lock_map;
-        AttachmentLock lock(const Attachment::ID &id, std::shared_ptr<std::atomic_flag> gc_clear_flag);
-        bool is_locked(const Attachment::ID &id);
-    };
-
-    AttLock _att_lock;
 
     ///contains true if gc is clear - it doesn't need to run, false = dirty, run gc
     std::shared_ptr<std::atomic_flag> _gc_is_clear;

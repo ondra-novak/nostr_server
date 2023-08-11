@@ -9,10 +9,13 @@
 #include "peer.h"
 #include "nostr_server_version.h"
 #include "fulltext.h"
+#include "kinds.h"
 #include <coroserver/http_ws_server.h>
+#include <coroserver/strutils.h>
 #include <docdb/json.h>
 #include <sstream>
 #include <shared/logOutput.h>
+
 
 namespace nostr_server {
 
@@ -92,7 +95,7 @@ void App::init_handlers(coroserver::http::Server &server) {
     server.set_handler("/stats", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req){
         return me->send_simple_stats(req);
     });
-    server.set_handler("/media", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath)->cocls::future<bool>{
+    server.set_handler("/file", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath)->cocls::future<bool>{
         if (req[coroserver::http::strtable::hdr_etag].has_value()) {
             req.set_status(304);
             co_await req.send("");
@@ -100,17 +103,29 @@ void App::init_handlers(coroserver::http::Server &server) {
         }
         if (vpath.empty()) co_return false;
         vpath = vpath.substr(1);
-        Binary<32> id = Binary<32>::from_hex(vpath);
-        docdb::DocID docid = me->find_attachment(id);
+        Event::ID id;
+        coroserver::base64::decode(vpath, [&, pos = 0U](unsigned char c) mutable {
+            if (pos < id.size()) id[pos++] = c;
+        }, coroserver::base64::Table::get_base64url_table());
+        docdb::DocID docid = me->find_event_by_id(id);
         if (docid) {
             auto evatt = me->_storage.find(docid);
-            if (evatt && std::holds_alternative<Attachment>(evatt->document)) {
-                const Attachment &att = std::get<Attachment>(evatt->document);
-                req.add_header(coroserver::http::strtable::hdr_content_type,att.content_type);
-                req.add_header(coroserver::http::strtable::hdr_etag, "immutable");
-                req.caching(24*60*60*365);
-                co_await req.send(att.data);
-                co_return true;
+            if (evatt && std::holds_alternative<Event>(evatt->document)) {
+                const Event &evv = std::get<Event>(evatt->document);
+                std::string mime = evv.get_tag_content("m");
+                Attachment::ID hash = Attachment::ID::from_hex(evv.get_tag_content("x"));;
+                auto attid = me->find_attachment(hash);
+                if (attid) {
+                    auto evatt2 = me->_storage.find(attid);
+                    if (evatt2 && std::holds_alternative<Attachment>(evatt2->document)) {
+                        const Attachment &att = std::get<Attachment>(evatt2->document);
+                        req.add_header(coroserver::http::strtable::hdr_content_type,mime);
+                        req.add_header(coroserver::http::strtable::hdr_etag, vpath);
+                        req.caching(24*60*60*365);
+                        co_await req.send(att.data);
+                        co_return true;
+                    }
+                }
 
             }
         }
@@ -133,8 +148,9 @@ void App::IndexByAuthorKindFn::operator()(Emit emit, const EventOrAttachment &ev
     if (!std::holds_alternative<Event>(evatt)) return;
     const Event &ev = std::get<Event>(evatt);
     std::string tag;
-    bool replacable_1 = (ev.kind == 0) | (ev.kind == 3) | ((ev.kind >= 10000) & (ev.kind < 20000));
-    bool replacable_2 = (ev.kind >= 30000) & (ev.kind < 40000);
+    bool replacable_1 = (ev.kind == kind::Metadata) | (ev.kind == kind::Contacts)
+                       | ((ev.kind >= kind::Replaceable_Begin) & (ev.kind < kind::Replaceable_End));
+    bool replacable_2 = (ev.kind >= kind::Parameterized_Replaceable_Begin) & (ev.kind < kind::Parameterized_Replaceable_End);
     bool replacable = replacable_1 | replacable_2;
     if  (replacable_2) {
         tag = ev.get_tag_content("d");
@@ -183,10 +199,10 @@ template<typename Emit>
 void App::IndexAttachmentFn::operator()(Emit emit, const EventOrAttachment &evatt) const {
     if (std::holds_alternative<Event>(evatt)) {
         const Event &ev = std::get<Event>(evatt);
-        ev.for_each_tag("attachment",[&](const Event::Tag &tag) {
-            Attachment::ID attid = Attachment::ID::from_hex(tag.content);
+        if (ev.kind == kind::File_Header && ev.find_indexed_tag('f', "file")) {
+            Attachment::ID attid = Attachment::ID::from_hex(ev.get_tag_content("x"));
             emit({attid, emit.id()},true);
-        });
+        }
     } else if (std::holds_alternative<Attachment>(evatt)) {
         const Attachment &att = std::get<Attachment>(evatt);
         emit(att.id, false);
@@ -415,12 +431,24 @@ inline void App::IndexForFulltextFn::operator ()(Emit emit, const EventOrAttachm
     if (!std::holds_alternative<Event>(evatt)) return;
     const Event &ev = std::get<Event>(evatt);
 
-    if (ev.kind == 0 || ev.kind == 1 || ev.kind == 2 || ev.kind == 30023) {
+    if (ev.kind == kind::Metadata || ev.kind == kind::Short_Text_Note
+          || ev.kind == kind::Recommend_Relay || ev.kind == kind::Long_form_Content) {
         std::vector<WordToken> tokens;
         tokenize_text(ev.content, tokens);
         for (const auto &x: tokens) {
             if (x.first.size()>1) {
                 emit(x.first, x.second);
+            }
+        }
+    }
+    for (const Event::Tag &t: ev.tags) {
+        if (t.tag == "description" || t.tag == "name" || t.tag == "subject" || t.tag == "summary" || t.tag == "title") {
+            std::vector<WordToken> tokens;
+            tokenize_text(t.content, tokens);
+            for (const auto &x: tokens) {
+                if (x.first.size()>1) {
+                    emit(x.first, x.second);
+                }
             }
         }
     }
@@ -432,8 +460,8 @@ JSON App::get_server_capabilities() const {
         limitation.set("min_pow_difficulty", _server_options.pow);
     }
     limitation.set("min_prefix",32);
-    limitation.set("max_attachment_size",static_cast<std::intmax_t>(_server_options.attachment_max_size));
-    limitation.set("max_attachment_count",static_cast<std::intmax_t>(_server_options.attachment_max_count));
+    limitation.set("max_message_length", static_cast<std::intmax_t>(_server_options.max_message_size));
+    limitation.set("max_file_size",static_cast<std::intmax_t>(_server_options.attachment_max_size));
     JSON doc = {
         {"name", _server_desc.name},
         {"description", std::string_view(_server_desc.desc)},
@@ -466,10 +494,12 @@ bool App::is_home_user(const Event::Pubkey &pubkey) const {
     return fnd;
 }
 
+
 void App::publish(Event &&event, const void *publisher)  {
 
     //if replacable event, find event to replace
     auto to_replace = doc_to_replace(event);
+    bool gc = event.kind == kind::Event_Deletion;
 
     //to_replace==-1 means that this event is old, cannot be replaced
     if (to_replace != docdb::DocID(-1)) {
@@ -477,30 +507,35 @@ void App::publish(Event &&event, const void *publisher)  {
         _storage.put(event, to_replace);
         //publish event
         event_publish.publish(EventSource{std::move(event),publisher});
+
+        if (gc) {
+            start_gc_thread();
+        }
+
     }
 
-    if (_gc_is_clear->test_and_set(std::memory_order_relaxed) == false) {
-        start_gc_thread();
+}
+
+void App::publish(Event &&ev, const Attachment &attach, const void *publisher) {
+    //if replacable event, find event to replace
+    auto to_replace = doc_to_replace(ev);
+    auto att_to_replace = find_attachment(attach.id);
+
+     //to_replace==-1 means that this event is old, cannot be replaced
+    if (to_replace != docdb::DocID(-1)) {
+        //replace event
+        docdb::Batch b;
+        _storage.put(b, ev, to_replace);
+        _storage.put(b, std::move(attach), att_to_replace);
+        _db->commit_batch(b);
+        //publish event
+        event_publish.publish(EventSource{std::move(ev),publisher});
     }
+
 
 
 }
 
-AttachmentLock App::publish_attachment(Attachment &&event) {
-    AttachmentLock lock = _att_lock.lock(event.id, _gc_is_clear);
-    docdb::DocID to_replace = find_attachment(event.id);
-    _storage.put(EventOrAttachment(std::move(event)), to_replace);
-    return lock;
-}
-
-AttachmentLock App::lock_attachment(const Attachment::ID &id)  {
-    if (find_attachment(id)) {
-        AttachmentLock lock = _att_lock.lock(id, _gc_is_clear);
-        return lock;
-    } else  {
-        return {};
-    }
-}
 
 docdb::DocID App::find_attachment(const Attachment::ID &id) const {
     auto fnd = _index_attachments.find(id);
@@ -511,13 +546,19 @@ docdb::DocID App::find_attachment(const Attachment::ID &id) const {
     }
 }
 
-std::string App::get_attachment_link(const Attachment::ID &id) const {
-    auto docid = find_attachment(id);
-    if (docid) {
-        return "media/"+id.to_hex();
-    } else {
-        return "";
+std::string App::get_attachment_link(const Event::ID &id, std::string_view mime) const {
+    std::string s = "file/";
+    coroserver::base64::encode(
+            {reinterpret_cast<const char *>(id.data()), id.size()},[&](char c){
+        s.push_back(c);
+    }, coroserver::base64::Table::get_base64url_table());
+    auto ctx = coroserver::http::strContentType[mime];
+    if (ctx != coroserver::http::ContentType::binary) {
+        std::string_view ext = coroserver::http::ext2ctx[ctx];
+        if (!ext.empty()) s.append(".").append(ext);
     }
+
+    return s;
 }
 
 App::Storage::TransactionObserver App::autocompact() {
@@ -543,7 +584,6 @@ std::size_t App::run_attachment_gc(ondra_shared::LogObject &lg, std::stop_token 
     }
     for (const auto &k: killthem) {
         if (stp.stop_requested()) break;
-        if (_att_lock.is_locked(k)) continue;
         lg.debug("Deleting attachment: $1", k.to_hex());
         auto fnd = _index_attachments.find(k);
         if (fnd) {
@@ -577,39 +617,6 @@ void App::start_gc_thread() {
     }
 }
 
-AttachmentLock App::AttLock::lock(const Attachment::ID &id, std::shared_ptr<std::atomic_flag> gc_clear_flag) {
-    std::lock_guard _(_mx);
-    AttachmentLock fnd;
-    auto iter = std::remove_if(_lock_map.begin(), _lock_map.end(), [&](const AttachmentWeakLock &x){
-        AttachmentLock l = x.lock();
-        if (l && *l == id) fnd = l;
-        return l == nullptr;
-    });
-    _lock_map.erase(iter, _lock_map.end());
-    if (!fnd) {
-
-        fnd = std::shared_ptr<Attachment::ID>(new Attachment::ID(id),
-                        [=](Attachment::ID *z){
-                                              delete z;
-                                              gc_clear_flag->clear();
-                        });
-
-        _lock_map.push_back(fnd);
-    }
-    return fnd;
-}
-
-bool App::AttLock::is_locked(const Attachment::ID &id) {
-    std::lock_guard _(_mx);
-    bool locked = false;
-    auto iter = std::remove_if(_lock_map.begin(), _lock_map.end(), [&](const AttachmentWeakLock &x){
-        AttachmentLock l = x.lock();
-        if (l && *l == id) locked = true;
-        return l == nullptr;
-    });
-    _lock_map.erase(iter, _lock_map.end());
-    return locked;
-}
 
 
 

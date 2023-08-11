@@ -47,6 +47,7 @@ struct Event {
     ID id;
     Pubkey author;
     Signature sig;
+    unsigned char ref_level = 0;
 
     static Event fromJSON(std::string_view json_text);
     static Event fromStructured(const docdb::Structured &json);
@@ -81,7 +82,6 @@ struct Attachment {
     using ID = Binary<32>;
 
     ID id;
-    std::string content_type;
     std::string data;
 };
 
@@ -110,13 +110,10 @@ struct EventDocument {
             std::copy(ev.id.begin(), ev.id.end(), out);
             std::copy(ev.author.begin(), ev.author.end(), out);
             std::copy(ev.sig.begin(), ev.sig.end(), out);
+            *out++=ev.ref_level;
         } else {
             const Attachment &att = std::get<Attachment>(evatt);
             out = std::copy(att.id.begin(), att.id.end(), out);
-            std::string_view ctx = att.content_type;
-            ctx = ctx.substr(0,255);
-            *out++=static_cast<char>(ctx.size());
-            out = std::copy(ctx.begin(), ctx.end(), out);
             out = std::copy(att.data.begin(), att.data.end(), out);
         }
         return out;
@@ -129,11 +126,6 @@ struct EventDocument {
             Attachment &att  = std::get<Attachment>(out);
             for (std::size_t i = 0; i < att.id.size() && at != end; i++) {
                 att.id[i] = *at++;
-            }
-            std::size_t sz = get_extra(at, end);
-            att.content_type.resize(sz);
-            for (std::size_t i = 0; i < sz && at != end; i++) {
-                att.content_type[i] = *at++;
             }
             att.data.resize(std::distance(at,end));
             std::copy(at,end,att.data.begin());
@@ -168,6 +160,7 @@ struct EventDocument {
             load_bin(at, end, ev.id);
             load_bin(at, end, ev.author);
             load_bin(at, end, ev.sig);
+            ev.ref_level = get_extra(at, end);
             assert(ev.calc_id() == ev.id);
             ev.build_hash_map();
             return out;

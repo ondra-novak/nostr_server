@@ -4,7 +4,7 @@
 
 #include "event.h"
 #include "iapp.h"
-
+#include "kinds.h"
 
 #include <docdb/incremental_aggregator.h>
 #include <algorithm>
@@ -52,6 +52,8 @@ struct WhiteListIndexFn {
         if (!std::holds_alternative<Event>(evatt)) return;
         const Event &ev = std::get<Event>(evatt);
 
+        if (ev.ref_level) return;
+
         auto update_counter = [&](unsigned int (Karma::*val)) {
                 ev.for_each_tag("p",[&](const Event::Tag &t){
                     auto pubkey = Event::Pubkey::from_hex(t.content);
@@ -70,7 +72,7 @@ struct WhiteListIndexFn {
                     }
                 });
         };
-        if (ev.kind < 4)
+        if (ev.kind < kind::Encrypted_Direct_Messages)
         {
             if constexpr(!emit.erase) {
                 auto v = emit(ev.author);
@@ -89,10 +91,10 @@ struct WhiteListIndexFn {
         }
 
         switch (ev.kind) {
-            case 1: update_counter(&Karma::mentions);break;
-            case 3: update_counter(&Karma::followers);break;
-            case 4: update_counter(&Karma::directmsgs);break;
-            case 10000: update_counter(&Karma::mutes);break;
+            case kind::Short_Text_Note: update_counter(&Karma::mentions);break;
+            case kind::Contacts: update_counter(&Karma::followers);break;
+            case kind::Encrypted_Direct_Messages: update_counter(&Karma::directmsgs);break;
+            case kind::Mute_List: update_counter(&Karma::mutes);break;
             default:break;
         }
     }

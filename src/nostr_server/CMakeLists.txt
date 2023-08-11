@@ -11,7 +11,6 @@ add_executable(nostr_server
 	bech32.cpp
 	filter.cpp
 	event.cpp
-	attachments.cpp
 	whitelist.cpp
 )
 

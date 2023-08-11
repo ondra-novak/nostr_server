@@ -19,8 +19,8 @@ struct ServerOptions {
     int pow = 0; //specifies count of bits for Proof of work (0 - disabled)
     int event_rate_window = 10;
     int event_rate_limit = 10;
-    std::size_t attachment_max_count = 4;
-    std::size_t attachment_max_size = 256*1024;
+    std::size_t attachment_max_size = 1*1024*1024;
+    std::size_t max_message_size=64*1024;
     bool read_only;
     bool whitelisting;
     std::string replicators;

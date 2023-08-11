@@ -60,16 +60,15 @@ public:
     virtual bool is_home_user(const Event::Pubkey & pubkey) const = 0;
     virtual void client_counter(int increment) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
+    virtual void publish(Event &&ev, const Attachment &attach, const void *publisher) = 0;
     virtual bool check_whitelist(const Event::Pubkey &k) const = 0;
-    virtual AttachmentLock publish_attachment(Attachment &&event) = 0;
     ///Finds attachment by id
     /**
      * @param id id to find
      * @return docid if found, or zero if not
      */
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const = 0;
-    virtual AttachmentLock lock_attachment(const Attachment::ID &id) = 0;
-    virtual std::string get_attachment_link(const Event::ID &mediaHash) const = 0;
+    virtual std::string get_attachment_link(const Event::ID &mediaHash, std::string_view mime) const = 0;
 
 };
 

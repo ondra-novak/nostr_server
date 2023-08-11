@@ -6,7 +6,7 @@
 #include "signature.h"
 #include "config.h"
 #include "rate_limiter.h"
-#include "attachments.h"
+
 
 #include "telemetry_def.h"
 
@@ -50,7 +50,8 @@ protected:
     Event::Pubkey _auth_pubkey;
     std::string _auth_nonce;
     JSON _client_capabilities;
-    AttachmentUploadControl _attachments;
+
+    std::optional<Event> _file_event;
 
     Subscriptions _subscriptions;
 
@@ -73,9 +74,8 @@ protected:
     void on_req(const JSON &msg);
     void on_count(const JSON &msg);
     void on_close(const JSON &msg);
-    void on_attach(const JSON &msg);
-    void on_fetch(const JSON &msg);
-    void on_link(const JSON &msg);
+    void on_file(const JSON &msg);
+    void on_retrieve(const JSON &msg);
 
     void event_deletion(const Event &event);
 
@@ -87,7 +87,13 @@ protected:
     void process_auth(const JSON &jmsg);
     void send_error(std::string_view id, std::string_view text);
     void send_notice(std::string_view text);
-    void on_attachment_published(AttachmentLock att);
+
+    enum class FileError {
+        malformed,
+        unsupported_kind,
+        max_size
+
+    };
 };
 
 }
