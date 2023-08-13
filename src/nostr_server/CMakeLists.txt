@@ -11,7 +11,7 @@ add_executable(nostr_server
 	bech32.cpp
 	filter.cpp
 	event.cpp
-	whitelist.cpp
+#	follower.cpp	
 )
 
 target_link_libraries(nostr_server

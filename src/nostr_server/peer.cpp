@@ -2,10 +2,10 @@
 
 #include <coroserver/http_ws_server.h>
 #include <coroserver/http_stringtables.h>
-#include <coroserver/static_lookup.h>
 #include <docdb/json.h>
 
 #include "peer.h"
+#include "protocol.h"
 
 #include <openssl/sha.h>
 #include <sstream>
@@ -22,26 +22,12 @@ Peer::Peer(coroserver::http::ServerRequest &req, PApp app, const ServerOptions &
 {
 /*    _sensor.enable(std::move(ident), std::move(user_agent));
     _shared_sensor.enable();*/
-    _app->client_counter(1);
+    _app->client_counter(1, _req.get_url());
 }
 Peer::~Peer() {
-    _app->client_counter(-1);
+    _app->client_counter(-1, _req.get_url());
 }
 
-NAMED_ENUM(Command,
-        unknown,
-        REQ,
-        EVENT,
-        CLOSE,
-        COUNT,
-        EOSE,
-        NOTICE,
-        AUTH,
-        OK,
-        FILE,
-        RETRIEVE,
-);
-constexpr NamedEnum_Command commands={};
 
 
 using namespace coroserver::ws;

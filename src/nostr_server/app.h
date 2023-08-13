@@ -18,6 +18,7 @@
 #include <shared/logOutput.h>
 #include <stop_token>
 #include <memory>
+#include <set>
 #include <thread>
 
 namespace nostr_server {
@@ -44,13 +45,14 @@ public:
     virtual docdb::PDatabase get_database() const override {return _db;}
     virtual JSON get_server_capabilities() const override;
     virtual bool is_home_user(const Event::Pubkey &pubkey) const override;
-    virtual void client_counter(int increment) override;
+    virtual void client_counter(int increment, std::string_view url) override;
     virtual void publish(Event &&ev, const void *publisher) override;
     virtual void publish(Event &&ev, const Attachment &attach, const void *publisher) override;
     virtual docdb::DocID find_replacable(std::string_view pubkey, unsigned int kind, std::string_view category) const override;
     virtual bool check_whitelist(const Event::Pubkey &k) const override;
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
     virtual std::string get_attachment_link(const Event::ID &id, std::string_view mime) const override;
+    virtual bool is_this_me(std::string_view relay) const override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -108,7 +110,6 @@ protected:
     telemetry::SharedSensor<StorageSensor> _storage_sensor;
     mutable bool _empty_database = true;
 
-    std::atomic<int> _clients = {};
 
     Storage _storage;
     IndexById _index_by_id;
@@ -120,6 +121,7 @@ protected:
     IndexForFulltext _index_fulltext;
     WhiteListIndex _index_whitelist;
     IndexAttachments _index_attachments;
+
 
 
     Storage::TransactionObserver autocompact();
@@ -136,6 +138,9 @@ protected:
     ///contains true if gc is clear - it doesn't need to run, false = dirty, run gc
     std::shared_ptr<std::atomic_flag> _gc_is_clear;
 
+    mutable std::mutex _app_share;
+    int _clients = 0;
+    std::set<std::string, std::less<> > _this_relay_url;
 };
 
 

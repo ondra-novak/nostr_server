@@ -126,7 +126,7 @@ nostr_server::Config init_cfg(int argc, char **argv) {
     outcfg.options.replicators = options["replicators"].getString();
     outcfg.options.read_only= options["read_only"].getBool(false);
     outcfg.options.attachment_max_size = options["max_file_size_kb"].getUInt(1024)*1024;
-    outcfg.options.max_message_size = options["max_event_size_kb"].getUInt(64)*1024;
+    outcfg.options.max_message_size = options["max_message_size_kb"].getUInt(64)*1024;
 
     outcfg.private_key = replication["private_key"].getString("replicator_01");
 

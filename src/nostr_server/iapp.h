@@ -58,10 +58,11 @@ public:
     virtual docdb::PDatabase get_database() const = 0;
     virtual JSON get_server_capabilities() const = 0;
     virtual bool is_home_user(const Event::Pubkey & pubkey) const = 0;
-    virtual void client_counter(int increment) = 0;
+    virtual void client_counter(int increment, std::string_view url) = 0;
     virtual void publish(Event &&ev, const void *publisher) = 0;
     virtual void publish(Event &&ev, const Attachment &attach, const void *publisher) = 0;
     virtual bool check_whitelist(const Event::Pubkey &k) const = 0;
+    virtual bool is_this_me(std::string_view relay) const = 0;
     ///Finds attachment by id
     /**
      * @param id id to find

@@ -10,6 +10,10 @@
 #include "nostr_server_version.h"
 #include "fulltext.h"
 #include "kinds.h"
+
+#include "whitelist_impl.h"
+#include "routing_imp.h"
+
 #include <coroserver/http_ws_server.h>
 #include <coroserver/strutils.h>
 #include <docdb/json.h>
@@ -261,8 +265,13 @@ static void append_time(const Filter &f, docdb::Key &from, docdb::Key &to) {
 };
 
 
-void App::client_counter(int increment)  {
-    _clients.fetch_add(increment, std::memory_order_relaxed);
+void App::client_counter(int increment, std::string_view url)  {
+    std::lock_guard _(_app_share);
+    _clients+=increment;
+    auto iter = _this_relay_url.find(url);
+    if (iter == _this_relay_url.end())  {
+        _this_relay_url.emplace(std::string(url));
+    }
 }
 
 
@@ -476,10 +485,11 @@ JSON App::get_server_capabilities() const {
 }
 
 cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req) {
+    std::lock_guard lk(_app_share);
     std::string out;
     _db->get_level_db().GetProperty("leveldb.approximate-memory-usage", &out);
     JSON ev = {
-            {"active_connections",_clients.load(std::memory_order_relaxed)},
+            {"active_connections",_clients},
             {"stored_events", static_cast<std::intmax_t>(_storage.get_rev())},
             {"database_size", static_cast<std::intmax_t>(_db->get_index_size(docdb::RawKey(0), docdb::RawKey(0xFF)))},
             {"memory_usage", static_cast<std::intmax_t>(std::strtoul(out.c_str(), nullptr, 10))}};
@@ -617,6 +627,13 @@ void App::start_gc_thread() {
     }
 }
 
+bool App::is_this_me(std::string_view relay) const {
+    if (relay.empty()) return true;
+    if (relay.back() == '/') relay = relay.substr(0, relay.size()-1);
+    std::lock_guard _(_app_share);
+    auto iter = _this_relay_url.find(relay);
+    return iter != _this_relay_url.end();
+}
 
 
 

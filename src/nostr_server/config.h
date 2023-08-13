@@ -15,6 +15,12 @@ struct ServerDescription {
     std::string contact;
 };
 
+struct FollowerConfig {
+    unsigned int max_depth = 0;
+    unsigned int max_users_per_connection = 100;
+    unsigned int refresh_period_minutes=10;
+};
+
 struct ServerOptions {
     int pow = 0; //specifies count of bits for Proof of work (0 - disabled)
     int event_rate_window = 10;
@@ -70,6 +76,7 @@ struct Config {
     ReplicationConfig replication_config;
     OpenMetricConf metric;
     RelayBotConfig botcfg;
+    FollowerConfig followercfg;
 
 
 };
