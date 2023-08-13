@@ -63,6 +63,17 @@ public:
     virtual void publish(Event &&ev, const Attachment &attach, const void *publisher) = 0;
     virtual bool check_whitelist(const Event::Pubkey &k) const = 0;
     virtual bool is_this_me(std::string_view relay) const = 0;
+    ///retrieve all known relays (exploring routing events)
+    /** There can be empty string as relay which denotes that some users has unknown relay */
+    virtual std::vector<std::pair<std::string, Event::Depth> > get_known_relays() const = 0;
+    ///retrieve all users on specified relay
+    /**
+     * @param relay relay to search
+     * @return returns pubkey and reference level for every user. Reference level defines how far the
+     * user is. Zero means, that this is local user, 1 means that a local user following that user, 2 means
+     * that there is intermediate user between this user and local user
+     */
+    virtual std::vector<std::pair<Event::Pubkey, Event::Depth> > get_users_on_relay(std::string_view relay) const = 0;
     ///Finds attachment by id
     /**
      * @param id id to find

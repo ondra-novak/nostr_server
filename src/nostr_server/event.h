@@ -36,6 +36,7 @@ struct Event {
     using Signature = Binary<64>;
     using SignatureHex = std::array<char, 128>;
     using Kind = unsigned int;
+    using Depth = unsigned char;
 
 
     Kind kind = 0;
@@ -47,7 +48,7 @@ struct Event {
     ID id;
     Pubkey author;
     Signature sig;
-    unsigned char ref_level = 0;
+    Depth ref_level = 0;
 
     static Event fromJSON(std::string_view json_text);
     static Event fromStructured(const docdb::Structured &json);

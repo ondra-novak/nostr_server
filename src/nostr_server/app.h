@@ -8,6 +8,7 @@
 #include "telemetry_def.h"
 #include "../telemetry/open_metrics/Collector.h"
 #include "whitelist.h"
+#include "routing.h"
 
 
 #include <docdb/json.h>
@@ -53,6 +54,8 @@ public:
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
     virtual std::string get_attachment_link(const Event::ID &id, std::string_view mime) const override;
     virtual bool is_this_me(std::string_view relay) const override;
+    virtual std::vector<std::pair<std::string, Event::Depth>  >get_known_relays() const override;
+    virtual std::vector<std::pair<Event::Pubkey, Event::Depth> > get_users_on_relay(std::string_view relay) const override;
 protected:
     coroserver::http::StaticPage static_page;
 
@@ -104,6 +107,7 @@ protected:
     docdb::PDatabase _db;
     ServerDescription _server_desc;
     ServerOptions _server_options;
+    FollowerConfig _followerConfig;
     OpenMetricConf _open_metrics_conf;
     std::shared_ptr<telemetry::open_metrics::Collector> _omcoll;
     telemetry::SharedSensor<docdb::PDatabase> _dbsensor;
@@ -121,7 +125,7 @@ protected:
     IndexForFulltext _index_fulltext;
     WhiteListIndex _index_whitelist;
     IndexAttachments _index_attachments;
-
+    RoutingIndex _index_routing;
 
 
     Storage::TransactionObserver autocompact();

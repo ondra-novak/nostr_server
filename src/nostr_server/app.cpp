@@ -17,8 +17,11 @@
 #include <coroserver/http_ws_server.h>
 #include <coroserver/strutils.h>
 #include <docdb/json.h>
+#include <docdb/aggregator.h>
 #include <sstream>
 #include <shared/logOutput.h>
+
+using docdb::AggregateBy;
 
 
 namespace nostr_server {
@@ -37,6 +40,7 @@ App::App(const Config &cfg)
         ,_db(docdb::Database::create(cfg.database_path, cfg.leveldb_options))
         ,_server_desc(cfg.description)
         ,_server_options(cfg.options)
+        ,_followerConfig(cfg.followercfg)
         ,_open_metrics_conf(cfg.metric)
         ,_omcoll(std::make_shared<telemetry::open_metrics::Collector>())
         ,_storage(_db,"events")
@@ -49,6 +53,7 @@ App::App(const Config &cfg)
         ,_index_fulltext(_storage, "fulltext")
         ,_index_whitelist(_storage, "karma")
         ,_index_attachments(_storage,"attachments")
+        ,_index_routing(_storage, "routing")
         ,_gc_is_clear(std::make_shared<std::atomic_flag>())
 {
     _storage.register_transaction_observer(autocompact());
@@ -134,6 +139,25 @@ void App::init_handlers(coroserver::http::Server &server) {
             }
         }
         co_return false;
+    });
+    server.set_handler("/routing", coroserver::http::Method::GET, [me=shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<bool>{
+        std::ostringstream out;
+        if (vpath.empty()) {
+            auto relays = me->get_known_relays();
+            for (const auto &[r,d] : relays) {
+                out << static_cast<int>(d) << "\t" << r << std::endl;
+            }
+        } else if (vpath[0] == '/'){
+            vpath = vpath.substr(1);
+            std::string relay;
+            coroserver::url::decode(vpath, [&](char c){relay.push_back(c);});
+            auto users = me->get_users_on_relay(relay);
+            for (const auto &[r,d] : users) {
+                out << static_cast<int>(d) << "\t" << r.to_hex() << std::endl;
+            }
+        }
+        req.content_type(coroserver::http::ContentType::text_plain_utf8);
+        return req.send(out);
     });
 }
 
@@ -635,7 +659,32 @@ bool App::is_this_me(std::string_view relay) const {
     return iter != _this_relay_url.end();
 }
 
+static auto aggrDepth() {
+    return [dist = 255U](const docdb::Row &row) mutable-> Event::Depth{
+        auto [d] = row.get<unsigned char>();
+        if (d < dist) dist = d;
+        return Event::Depth(dist);
+    };
+}
 
+std::vector<std::pair<std::string, Event::Depth> > App::get_known_relays() const {
+    std::vector<std::pair<std::string, Event::Depth> > out;
+    for (const auto &row: docdb::AggregateBy<std::tuple<std::string> >::Recordset(
+            _index_routing.select_all(), aggrDepth())) {
+        out.push_back({std::get<0>(row.key), row.value});
+    }
+    return out;
+
+}
+
+std::vector<std::pair<Event::Pubkey, Event::Depth> > App::get_users_on_relay(std::string_view relay) const {
+    std::vector<std::pair<Event::Pubkey, unsigned char> > out;
+    for (const auto &row: docdb::AggregateBy<std::tuple<std::string, Event::Pubkey> >::Recordset(
+            _index_routing.select(relay), aggrDepth())) {
+        out.push_back({std::get<1>(row.key), row.value});
+    }
+    return out;
+}
 
 } /* namespace nostr_server */
 
