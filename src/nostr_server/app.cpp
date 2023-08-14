@@ -104,14 +104,12 @@ void App::init_handlers(coroserver::http::Server &server) {
     server.set_handler("/stats", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req){
         return me->send_simple_stats(req);
     });
-    server.set_handler("/file", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath)->cocls::future<bool>{
+    server.set_handler("/file/", coroserver::http::Method::GET, [me = shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath)->cocls::future<bool>{
         if (req[coroserver::http::strtable::hdr_etag].has_value()) {
             req.set_status(304);
             co_await req.send("");
             co_return true;
         }
-        if (vpath.empty()) co_return false;
-        vpath = vpath.substr(1);
         Event::ID id;
         coroserver::base64::decode(vpath, [&, pos = 0U](unsigned char c) mutable {
             if (pos < id.size()) id[pos++] = c;
