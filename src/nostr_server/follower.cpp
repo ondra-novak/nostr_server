@@ -16,26 +16,61 @@ namespace nostr_server {
 
 using namespace coroserver;
 
-void build(PApp app);
 
 
-FollowerService::FollowerService(PApp app, FollowIndex idx,
-        PubkeyIndex pubkey_idx,
-        coroserver::ContextIO ctx, FollowerConfig cfg)
+FollowerService::FollowerService(PApp app, coroserver::ContextIO ctx, Event::Depth max_depth)
 :_app(app)
-,_idx(idx)
-,_pubkey_idx(pubkey_idx)
 ,_ctx(ctx)
-,_cfg(cfg)
+,_max_depth(max_depth)
 ,_central_task(main_task())
 ,_sslctx(coroserver::ssl::Context::init_client())
 ,_httpc(ctx, _sslctx, App::software_url)
-
 {
 }
 
-FollowerService::~FollowerService() {
+cocls::future<void> FollowerService::start(std::stop_token stp, PApp app, coroserver::ContextIO ctx, Event::Depth max_depth, unsigned int monitor_timeout_s) {
+    coroserver::AsyncSupport asyncsup = ctx;
+
+    FollowerService me(app,ctx,max_depth);
+
+    while (!stp.stop_requested()) {
+        std::stop_source fetcher_stop;
+        auto asyncs = me.prepare_tasks(fetcher_stop.get_token());
+        std::vector<std::unique_ptr<cocls::future<void> > > tasks;
+        tasks.reserve(asyncs.size());
+        std::transform(asyncs.begin(), asyncs.end(), std::back_inserter(tasks), [&](cocls::async<void> &s){
+           return new auto(s.start());
+        });
+        auto f = asyncsup.wait_for(std::chrono::seconds(monitor_timeout_s), &me);
+        std::stop_callback cb(stp, [&]{
+            asyncsup.cancel_wait(&me);
+        });
+        coroserver::WaitResult rs = co_await f;
+        if (rs != coroserver::WaitResult::timeout) co_return;
+        fetcher_stop.request_stop();
+        for (auto &x: tasks) {
+            co_await *x;
+        }
+    }
+
 }
+
+std::vector<cocls::async<void> > FollowerService::prepare_tasks(std::stop_token token) {
+    auto relays = _app->get_known_relays();
+    std::vector<std::string> useful_relays;
+    useful_relays.reserve(relays.size());
+    bool unknown_users = false;
+    for (const auto &x: relays) {
+        if (x.first.empty()) unknown_users = true;
+        else if (x.second < _max_depth) useful_relays.push_back(x.first);
+    }
+    if (useful_relays.empty()) return {};
+
+
+
+}
+
+
 
 static auto aggrFn = [sum = 0](const docdb::Row &) mutable -> int  {
     return sum++;
@@ -51,16 +86,6 @@ cocls::future<void> FollowerService::main_task() {
         std::vector<std::unique_ptr<cocls::future<void> > > tasks;
         for (const auto &res: docdb::AggregateBy<std::tuple<std::string> >::Recordset(_idx.select_all(), aggrFn)) {
             tasks.emplace_back(new auto(start_fetcher(std::get<0>(res.key), fetcher_stop.get_token())));
-        }
-        auto f = asyncsup.wait_for(std::chrono::minutes(_cfg.refresh_period_minutes), &stp);
-        std::stop_callback cb(stp, [&]{
-            asyncsup.cancel_wait(&stp);
-        });
-        coroserver::WaitResult rs = co_await f;
-        if (rs != coroserver::WaitResult::timeout) co_return;
-        fetcher_stop.request_stop();
-        for (auto &x: tasks) {
-            co_await *x;
         }
     }
 

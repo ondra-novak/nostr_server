@@ -652,7 +652,7 @@ void App::start_gc_thread() {
 }
 
 bool App::is_this_me(std::string_view relay) const {
-    if (relay.empty()) return true;
+    if (relay.empty()) return false;
     if (relay.back() == '/') relay = relay.substr(0, relay.size()-1);
     std::lock_guard _(_app_share);
     auto iter = _this_relay_url.find(relay);
