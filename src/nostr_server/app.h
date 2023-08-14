@@ -54,6 +54,7 @@ public:
     virtual docdb::DocID find_attachment(const Attachment::ID &id) const override;
     virtual std::string get_attachment_link(const Event::ID &id, std::string_view mime) const override;
     virtual bool is_this_me(std::string_view relay) const override;
+    virtual int get_karma(const Event::Pubkey &k) const override;
     virtual std::vector<std::pair<std::string, Event::Depth>  >get_known_relays() const override;
     virtual std::vector<std::pair<Event::Pubkey, Event::Depth> > get_users_on_relay(std::string_view relay) const override;
 protected:

@@ -304,12 +304,14 @@ void Peer::on_req(const docdb::Structured &msg) {
                     for (const auto &f: flts) {
                         if (f.test(ev)) {
                             auto sevent = ev.toStructured();
-                            if (ev.kind == kind::File_Header && ev.find_indexed_tag('f', "file")) {
+                            if (ev.nip97) {
                                 std::string url ("http");
                                 url.append(std::string_view(_req.get_url()).substr(2));
                                 url.append(_app->get_attachment_link(ev.id, ev.get_tag_content("m")));
                                 sevent.set("file_url", url);
+                                sevent.set("nip97", true);
                             }
+                            sevent.set("karma",_app->get_karma(ev.author));
                             if (!send({commands[Command::EVENT], subid, sevent})) return;
                             --limit;
                             break;
@@ -379,11 +381,12 @@ void Peer::event_deletion(const Event &event) {
             if (ev.author != event.author) {
                 throw std::invalid_argument("pubkey missmatch");
             }
-              if (deleted_something) {
-                  storage.erase(b, row.id);
-              } else {
-                  storage.put(b, event, row.id);
-              }
+            if (deleted_something) {
+                storage.erase(b, row.id);
+            } else {
+                storage.put(b, event, row.id);
+                deleted_something = true;
+            }
         }
     }
     if (deleted_something) {
@@ -479,17 +482,20 @@ void Peer::processBinaryMessage(std::string_view msg_text) {
         return;
     }
 
-    auto id = _app->find_attachment(hash);
-    if (id) {
+    ev.nip97 = true;
+
+    if (_app->find_event_by_id(_file_event->id) ) {
         send({commands[Command::OK], ev.id.to_hex(), true, "duplicate"});
-        if (_app->find_event_by_id(_file_event->id) == 0) {
-            _app->publish(std::move(ev), nullptr);
-        }
-        _file_event.reset();
         return;
     }
+
     try {
-        _app->publish(std::move(ev),Attachment{hash,  std::string(msg_text)}, nullptr);
+        auto id = _app->find_attachment(hash);
+        if (id) {
+          _app->publish(std::move(ev), nullptr);
+        } else {
+          _app->publish(std::move(ev),Attachment{hash,  std::string(msg_text)}, nullptr);
+        }
         _file_event.reset();
         send({commands[Command::OK], ev.id.to_hex(), true, ""});
     } catch (std::exception &e) {
@@ -504,7 +510,6 @@ void Peer::on_file(const JSON &msg) {
             try {
                 if (event.kind != kind::File_Header) throw FileError::unsupported_kind;
 
-                bool relay_flag = false;
                 std::string mime;
                 std::string hash;
                 std::string size;
@@ -516,8 +521,6 @@ void Peer::on_file(const JSON &msg) {
                         if (mime.empty()) mime = x.content; else throw FileError::malformed;
                     } else if (x.tag == "size") {
                         if (size.empty()) size = x.content; else throw FileError::malformed;
-                    } else if (x.tag == "f" && x.content == "flag") {
-                        if (!relay_flag) relay_flag = true; else throw FileError::malformed;
                     }
                 }
                 if (size.empty() || mime.empty() || hash.size() != 64) throw FileError::malformed;
@@ -555,7 +558,7 @@ void Peer::on_retrieve(const JSON &msg) {
         auto doc = stor.find(docid);
         if (!doc || !std::holds_alternative<Event>(doc->document)) break;
         const Event &event = std::get<Event>(doc->document);
-        if (event.kind != kind::File_Header || !event.find_indexed_tag('f', "file")) break;
+        if (!event.nip97) break;
         std::string hash = event.get_tag_content("x");
         auto att_hex = Binary<32>::from_hex(hash);
         auto att_id = _app->find_attachment(att_hex);

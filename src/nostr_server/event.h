@@ -48,6 +48,7 @@ struct Event {
     ID id;
     Pubkey author;
     Signature sig;
+    bool nip97 = false;
     Depth ref_level = 0;
 
     static Event fromJSON(std::string_view json_text);
@@ -96,7 +97,7 @@ struct EventDocument {
         *out = static_cast<char>(evatt.index());
         if (std::holds_alternative<Event>(evatt)) {
             const Event &ev = std::get<Event>(evatt);
-            out = Srl::string_to_binary(0,ev.content,out);
+            out = Srl::string_to_binary(ev.nip97?0x80:0,ev.content,out);
             out = Srl::uint_to_binary(0,ev.kind,out);
             out = Srl::uint_to_binary(0,ev.created_at, out);
             out = Srl::uint_to_binary(0,ev.tags.size(),out);
@@ -137,6 +138,7 @@ struct EventDocument {
             Event &ev = std::get<Event>(out);
             auto x = get_extra(at,end);
             ev.content = Srl::string_from_binary(x, at, end);
+            ev.nip97 = (x & 0x80) != 0;
             x = get_extra(at,end);
             ev.kind = Srl::uint_from_binary(x,at,end);
             x = get_extra(at,end);
@@ -217,58 +219,11 @@ using AttachmentLock = std::shared_ptr<Attachment::ID>;
 using AttachmentWeakLock = std::weak_ptr<Attachment::ID>;
 
 
-#if 0
-
-template<typename Iter, std::size_t sz>
-Iter binary_from_hex(Iter beg, Iter end, std::array<unsigned char, sz> &out){
-    std::size_t ofs = 0;
-    while (beg != end && ofs < sz) {
-        char a = *beg;
-        unsigned char x = (a - '0') - ('A' - '0' - 10) * (a >= 'A') - ('a' - 'A') * (a >= 'a');
-        if (x > 0xF) break;
-        ++beg;
-        if (beg != end) {
-            char b = *beg;
-            unsigned char y = (b - '0') - ('A' - '0' - 10) * (b >= 'A') - ('a' - 'A') * (b >= 'a');
-            if (y > 0xF) break;
-            out[ofs] = (x << 4) | y;
-            ++ofs;
-            ++beg;
-        }
-    }
-    return beg;
-};
-
-template<typename OutIter, typename InIter>
-OutIter binary_to_hex(InIter beg, InIter end, OutIter out) {
-    while (beg != end) {
-        unsigned char val = *beg;
-        char a = val >> 4;
-        char b = val & 0xF;
-        a = a + '0' + ('a' - '0' - 10) * (a > 9);
-        b = b + '0' + ('a' - '0' - 10) * (b > 9);
-        *out = a;
-        ++out;
-        *out = b;
-        ++out;
-        ++beg;
-    }
-    return out;
+inline Attachment::ID get_attachment_id(const Event &ev) {
+    auto s = ev.get_tag_content("x");
+    return Attachment::ID::from_hex(s);
 }
 
-template<typename OutIter, std::size_t sz>
-OutIter binary_to_hex(const std::array<unsigned char, sz> &in, OutIter out) {
-    return binary_to_hex(in.begin(), in.end(), out);
-}
-
-template<std::size_t sz>
-std::string binary_to_hexstr(const std::array<unsigned char, sz> &in) {
-    std::string out(sz*2,' ');
-    binary_to_hex(in, out.begin());
-    return out;
-}
-
-#endif
 
 }
 

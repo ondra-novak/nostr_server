@@ -122,7 +122,7 @@ void App::init_handlers(coroserver::http::Server &server) {
             if (evatt && std::holds_alternative<Event>(evatt->document)) {
                 const Event &evv = std::get<Event>(evatt->document);
                 std::string mime = evv.get_tag_content("m");
-                Attachment::ID hash = Attachment::ID::from_hex(evv.get_tag_content("x"));;
+                Attachment::ID hash = get_attachment_id(evv);
                 auto attid = me->find_attachment(hash);
                 if (attid) {
                     auto evatt2 = me->_storage.find(attid);
@@ -273,6 +273,14 @@ bool App::check_whitelist(const Event::Pubkey &k) const
     if (!r) return false;
     return r->get_score() > 0;
 }
+
+int App::get_karma(const Event::Pubkey &k) const
+{
+    auto r = _index_whitelist.find(k);
+    if (!r) return 0;
+    return r->get_score();
+}
+
 
 static void append_time(const Filter &f, docdb::Key &from, docdb::Key &to) {
     if (f.since.has_value()) {

@@ -62,6 +62,7 @@ public:
     virtual void publish(Event &&ev, const void *publisher) = 0;
     virtual void publish(Event &&ev, const Attachment &attach, const void *publisher) = 0;
     virtual bool check_whitelist(const Event::Pubkey &k) const = 0;
+    virtual int get_karma(const Event::Pubkey &k) const = 0;
     virtual bool is_this_me(std::string_view relay) const = 0;
     ///retrieve all known relays (exploring routing events)
     /** There can be empty string as relay which denotes that some users has unknown relay */

@@ -78,7 +78,7 @@ class SimpleNostrClient {
             this.#pubKeyMinus2,
             now,
             ev.kind,
-            ev.tags,
+            ev.tags || [],
             ev.content
         ];
         var message = JSON.stringify( newevent );
@@ -180,7 +180,6 @@ async function do_upload() {
         content: desc,
         kind: 1063,
         tags: [
-            ["f","file"],
             ["x",fhex],
             ["m",mime],
             ["size", size],            
