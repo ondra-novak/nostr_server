@@ -38,6 +38,7 @@ constexpr Type Channel_Mute_User = 44;
 constexpr Type Encrypted_Group_Chat = 104;
 constexpr Type nosbin_Pastes = 1050;
 constexpr Type nosbin_Comments = 1051;
+constexpr Type Gift_Wrap_Event = 1059;
 constexpr Type File_Header = 1063;
 constexpr Type Reporting = 1984;
 constexpr Type Geospatial_Types = 4326;

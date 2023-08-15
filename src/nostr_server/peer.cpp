@@ -231,7 +231,7 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         }
         if (!_no_limit && _options.whitelisting) {
             if (!_app->check_whitelist(event.author)) {
-                if (k == 4) {
+                if (k == kind::Encrypted_Direct_Messages || k == kind::Gift_Wrap_Event) {  //receiver must be a local user
                     auto target = event.get_tag_content("p");
                     auto pk = Event::Pubkey::from_hex(target);
                     if (!_app->is_home_user(pk)) throw Blocked("Target user not found");

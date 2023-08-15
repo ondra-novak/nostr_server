@@ -26,7 +26,7 @@ using docdb::AggregateBy;
 
 namespace nostr_server {
 
-const docdb::Structured App::supported_nips = {1,5,9,11,12,16,20,33,42, 45,50,97};
+const docdb::Structured App::supported_nips = {1,5,9,11,12,16,20,24,33,42, 45,50,97};
 //to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;

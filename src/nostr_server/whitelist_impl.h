@@ -28,7 +28,7 @@ void WhiteListIndexFn::operator ()(Emit emit, const EventOrAttachment &evatt) co
                 }
             });
     };
-    if (ev.kind < kind::Encrypted_Direct_Messages && ev.ref_level == 0)
+    if (ev.kind < kind::Encrypted_Direct_Messages)
     {
         if constexpr(!emit.erase) {
             auto v = emit(ev.author);
