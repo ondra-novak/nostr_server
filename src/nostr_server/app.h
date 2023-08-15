@@ -93,6 +93,10 @@ protected:
         static constexpr int revision = 4;
         template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
     };
+    struct IndexNip05Fn {
+        static constexpr int revision = 1;
+        template<typename Emit> void operator()(Emit emit, const EventOrAttachment &ev) const;
+    };
 
 
     using IndexById = docdb::Indexer<Storage,IndexByIdFn,docdb::IndexType::unique>;
@@ -103,6 +107,7 @@ protected:
     using IndexTime = docdb::Indexer<Storage,IndexTimeFn,docdb::IndexType::multi>;
     using IndexForFulltext = docdb::Indexer<Storage,IndexForFulltextFn,docdb::IndexType::multi>;
     using IndexAttachments = docdb::Indexer<Storage,IndexAttachmentFn,docdb::IndexType::unique>;
+    using IndexNip05 = docdb::Indexer<Storage,IndexNip05Fn,docdb::IndexType::unique>;
 
     EventPublisher event_publish;
     docdb::PDatabase _db;
@@ -127,6 +132,7 @@ protected:
     WhiteListIndex _index_whitelist;
     IndexAttachments _index_attachments;
     RoutingIndex _index_routing;
+    IndexNip05 _index_nip05;
 
 
     Storage::TransactionObserver autocompact();
@@ -136,6 +142,7 @@ protected:
     cocls::future<bool> send_simple_stats(coroserver::http::ServerRequest &req);
     std::size_t run_attachment_gc(ondra_shared::LogObject &lg, std::stop_token stp);
     void start_gc_thread();
+    cocls::future<bool> process_nip05_request(coroserver::http::ServerRequest &req, std::string_view vpath);
 
     std::jthread _gc_thread;
     std::atomic<bool> _gc_running = {false};

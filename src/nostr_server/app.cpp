@@ -26,7 +26,7 @@ using docdb::AggregateBy;
 
 namespace nostr_server {
 
-const docdb::Structured App::supported_nips = {1,9,11,12,16,20,33,42, 45,50,97};
+const docdb::Structured App::supported_nips = {1,5,9,11,12,16,20,33,42, 45,50,97};
 //to be implemented: 40
 const std::string App::software_url = "git+https://github.com/ondra-novak/nostr_server.git";
 const std::string App::software_version = PROJECT_NOSTR_SERVER_VERSION;
@@ -54,6 +54,7 @@ App::App(const Config &cfg)
         ,_index_whitelist(_storage, "karma")
         ,_index_attachments(_storage,"attachments")
         ,_index_routing(_storage, "routing")
+        ,_index_nip05(_storage, "nip05")
         ,_gc_is_clear(std::make_shared<std::atomic_flag>())
 {
     _storage.register_transaction_observer(autocompact());
@@ -157,6 +158,9 @@ void App::init_handlers(coroserver::http::Server &server) {
         req.content_type(coroserver::http::ContentType::text_plain_utf8);
         return req.send(out);
     });
+    server.set_handler("/.well-known/nostr.json", coroserver::http::Method::GET, [me=shared_from_this()](coroserver::http::ServerRequest &req, std::string_view vpath) -> cocls::future<bool>{
+        return me->process_nip05_request(req, vpath);
+    });
 }
 
 
@@ -235,6 +239,22 @@ void App::IndexAttachmentFn::operator()(Emit emit, const EventOrAttachment &evat
     }
 }
 
+template<typename Emit>
+void App::IndexNip05Fn::operator()(Emit emit, const EventOrAttachment &evatt) const {
+    if (!std::holds_alternative<Event>(evatt)) return;
+    const Event &ev = std::get<Event>(evatt);
+    if (ev.kind == kind::Metadata) {
+        try {
+            auto ctx = docdb::Structured::from_json(ev.content);
+            std::string_view name = ctx["nip05"].as<std::string_view>();
+            if (name.find('@') != name.npos) {
+                emit(name);
+            }
+        } catch (...) {
+
+        }
+    }
+}
 
 docdb::DocID App::doc_to_replace(const Event &event) const {
     IndexByAuthorKindFn idx;
@@ -690,6 +710,47 @@ std::vector<std::pair<Event::Pubkey, Event::Depth> > App::get_users_on_relay(std
         out.push_back({std::get<1>(row.key), row.value});
     }
     return out;
+}
+
+struct Nip05req_query {
+    std::string name;
+    static constexpr auto fields = coroserver::http::makeQueryFieldMap<Nip05req_query>({
+        {"name", &Nip05req_query::name}
+    });
+};
+
+
+
+cocls::future<bool> App::process_nip05_request(coroserver::http::ServerRequest &req, std::string_view vpath) {
+    req.content_type(coroserver::http::ContentType::json);
+    docdb::Structured names = docdb::Structured::KeyPairs();
+    docdb::Structured relays = docdb::Structured::KeyPairs();
+    do {
+        Nip05req_query q;
+        coroserver::http::parse_query(vpath, Nip05req_query::fields, q);
+        if (q.name.empty() || q.name == "_")
+            return cocls::future<bool>::set_value(false);       //return here - allow to override by static pages
+        auto host = req.get_host();
+        std::string ident;
+        ident.append(q.name).append("@").append(host);
+        auto fres = _index_nip05.find(ident);
+        if (!fres) break;
+        auto doc = _storage.find(fres->id);
+        if (!doc || !std::holds_alternative<Event>(doc->document)) break;
+        const Event &ev = std::get<Event>(doc->document);
+        auto base_url = req.get_url();
+        std::string my_relay("ws");my_relay.append(base_url.substr(4,base_url.find("/.well-known")-4));
+        names.set (q.name,ev.author.to_hex());
+        relays.set(ev.author.to_hex(), docdb::Structured::Array({my_relay}));
+    }while(false);
+    docdb::Structured result = {
+            {"names",names},
+            {"relays",relays}
+    };
+    req.content_type(coroserver::http::ContentType::json);
+    req.add_header(coroserver::http::strtable::hdr_access_control_allow_origin, "*");
+    return req.send(result.to_json());
+
 }
 
 } /* namespace nostr_server */
