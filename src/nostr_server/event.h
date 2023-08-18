@@ -48,7 +48,11 @@ struct Event {
     ID id;
     Pubkey author;
     Signature sig;
+    ///this event contains binary data NIP97 (search 'x' tag for hash)
     bool nip97 = false;
+    ///this event was sent by someone who was authorized using AUTH and was found as local user
+    bool trusted = false;
+    ///contains reference depth -
     Depth ref_level = 0;
 
     static Event fromJSON(std::string_view json_text);
@@ -97,7 +101,7 @@ struct EventDocument {
         *out = static_cast<char>(evatt.index());
         if (std::holds_alternative<Event>(evatt)) {
             const Event &ev = std::get<Event>(evatt);
-            out = Srl::string_to_binary(ev.nip97?0x80:0,ev.content,out);
+            out = Srl::string_to_binary((ev.nip97?0x80:0)|(ev.trusted?0x40:0),ev.content,out);
             out = Srl::uint_to_binary(0,ev.kind,out);
             out = Srl::uint_to_binary(0,ev.created_at, out);
             out = Srl::uint_to_binary(0,ev.tags.size(),out);
@@ -139,6 +143,7 @@ struct EventDocument {
             auto x = get_extra(at,end);
             ev.content = Srl::string_from_binary(x, at, end);
             ev.nip97 = (x & 0x80) != 0;
+            ev.trusted = (x & 0x40) != 0;
             x = get_extra(at,end);
             ev.kind = Srl::uint_from_binary(x,at,end);
             x = get_extra(at,end);

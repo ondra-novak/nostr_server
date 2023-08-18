@@ -215,6 +215,9 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         if (!_secp.has_value()) {
             _secp.emplace();
         }
+        if (_authent && _app->is_home_user(_auth_pubkey)) {
+            event.trusted = true;
+        }
         if (!event.verify(*_secp)) {
             throw std::invalid_argument("Signature verification failed");
         }
@@ -229,7 +232,7 @@ void Peer::on_event_generic(const JSON &msg, Fn &&on_verify, bool no_special_eve
         if (!_no_limit && _options.read_only /*&& _options.replicators.find(pubkey) == _options.replicators.npos*/) {
             throw Blocked("Sorry, server is in read_only mode");
         }
-        if (!_no_limit && _options.whitelisting) {
+        if (!_no_limit && _options.whitelisting && !event.trusted) {
             if (!_app->check_whitelist(event.author)) {
                 if (k == kind::Encrypted_Direct_Messages || k == kind::Gift_Wrap_Event) {  //receiver must be a local user
                     auto target = event.get_tag_content("p");

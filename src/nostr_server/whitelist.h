@@ -46,7 +46,7 @@ struct KarmaDocument {
 };
 
 struct WhiteListIndexFn {
-    static constexpr int revision = 4;
+    static constexpr int revision = 5;
     template<typename Emit>
     void operator ()(Emit emit, const EventOrAttachment &evatt) const;
 };

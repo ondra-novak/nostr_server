@@ -51,6 +51,7 @@ void WhiteListIndexFn::operator ()(Emit emit, const EventOrAttachment &evatt) co
         case kind::Contacts: update_counter(&Karma::followers);break;
         case kind::Encrypted_Direct_Messages: update_counter(&Karma::directmsgs);break;
         case kind::Mute_List: update_counter(&Karma::mutes);break;
+        case kind::Gift_Wrap_Event: if (ev.trusted) update_counter(&Karma::directmsgs);break;
         default:break;
     }
 }

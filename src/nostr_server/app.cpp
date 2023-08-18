@@ -550,8 +550,9 @@ cocls::future<bool> App::send_simple_stats(coroserver::http::ServerRequest &req)
 }
 
 bool App::is_home_user(const Event::Pubkey &pubkey) const {
-    auto fnd = _index_replaceable.find({pubkey, static_cast<unsigned int>(0),std::string_view()});
-    return fnd;
+    auto r = _index_whitelist.find(pubkey);
+    if (!r) return false;
+    return r->local;
 }
 
 
